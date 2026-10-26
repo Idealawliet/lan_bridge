@@ -3,6 +3,7 @@ name: Build and publish desktop installers
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -59,7 +60,17 @@ jobs:
       - name: Build Windows EXE installer and portable ZIP
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/build-windows.ps1
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'windows-build.log'
+          $failed = $false
+          try { & ./scripts/build-windows.ps1 *> $log }
+          catch { $_ | Out-String | Add-Content $log; $failed = $true }
+          Get-Content $log
+          '### Windows build diagnostics' | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```text' | Add-Content $env:GITHUB_STEP_SUMMARY
+          Get-Content $log -Tail 160 | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($failed) { exit 1 }
       - name: Smoke test Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -77,21 +88,48 @@ jobs:
           if ($uninstall.ExitCode -ne 0) { throw 'Uninstall failed' }
       - name: Build macOS DMG and portable ZIP
         if: runner.os == 'macOS'
-        run: bash scripts/build-macos.sh
+        shell: bash
+        run: |
+          set +e
+          bash scripts/build-macos.sh 2>&1 | tee "$RUNNER_TEMP/macos-build.log"
+          result=${PIPESTATUS[0]}
+          {
+            echo '### macOS build diagnostics'
+            echo '```text'
+            tail -n 100 "$RUNNER_TEMP/macos-build.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$result"
       - name: Smoke test macOS disk image
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          set -euo pipefail
-          mount="$RUNNER_TEMP/lan-bridge-dmg"
-          mkdir -p "$mount"
-          hdiutil attach dist/*.dmg -mountpoint "$mount" -nobrowse -readonly
-          trap 'hdiutil detach "$mount"' EXIT
-          test -x "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
-          test "$(readlink "$mount/Applications")" = /Applications
-          codesign --verify --deep --strict "$mount/LAN Bridge.app"
-          lipo -info "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
-          lipo -verify_arch arm64 x86_64 "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
+          set +e
+          (
+            set -euo pipefail
+            mount="$RUNNER_TEMP/lan-bridge-dmg"
+            mkdir -p "$mount"
+            echo 'Mounting DMG'
+            hdiutil attach dist/*.dmg -mountpoint "$mount" -nobrowse -readonly
+            trap 'hdiutil detach "$mount"' EXIT
+            echo 'Checking application executable'
+            test -x "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
+            echo 'Checking Applications shortcut'
+            test "$(readlink "$mount/Applications")" = /Applications
+            echo 'Verifying application signature integrity'
+            codesign --verify --deep --strict --verbose=2 "$mount/LAN Bridge.app"
+            echo 'Checking universal architecture'
+            lipo -info "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
+            lipo -verify_arch arm64 x86_64 "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
+          ) 2>&1 | tee "$RUNNER_TEMP/macos-smoke.log"
+          result=${PIPESTATUS[0]}
+          {
+            echo '### macOS installer diagnostics'
+            echo '```text'
+            tail -n 100 "$RUNNER_TEMP/macos-smoke.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$result"
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ runner.os }}
