@@ -5,6 +5,7 @@ import 'package:lan_input/lan_input.dart';
 import 'bridge_controller.dart';
 import 'lan_discovery.dart';
 import 'routed_input.dart';
+import 'secure_transport.dart' show defaultSecurePort;
 
 class ControlledComputer {
   ControlledComputer(this.device, this.controller);
@@ -70,12 +71,75 @@ class LanWorkspace extends ChangeNotifier {
     try {
       await local.setRole(BridgeRole.source);
       local.setConnectionMode(ConnectionMode.server);
+      discovery.advertisement = () => {
+            'op': 'server',
+            'name': Platform.localHostname.length > 80
+                ? Platform.localHostname.substring(0, 80)
+                : Platform.localHostname,
+            'platform': Platform.operatingSystem,
+            'port': local.port == 0 ? defaultSecurePort : local.port,
+            'busy': busy || computers.length >= 16,
+          };
       await discovery.start();
       running = true;
       serving = true;
     } catch (e) {
       error = '无法启动发现服务：$e';
     } finally {
+      busy = false;
+      _notify();
+    }
+  }
+
+  void requestConnection(LanDevice device) {
+    if (!running || busy || _stopping || (!serving && !local.listening)) {
+      throw StateError('请先启动服务并等待当前操作完成');
+    }
+    discovery.requestConnection(device);
+  }
+
+  Future<void> leaveServer() async {
+    if (!running || serving || busy || _stopping) return;
+    busy = true;
+    _notify();
+    try {
+      await local.disconnect();
+      if (!_stopping && running) await local.listen(discoveredClient: true);
+    } finally {
+      busy = false;
+      _notify();
+    }
+  }
+
+  Future<void> control(String id) async {
+    await focus(id);
+    if (busy || _stopping || router.focused != id) return;
+    final controller = computers[id]?.controller;
+    if (controller == null) throw StateError('客户端已离开');
+    busy = true;
+    router.suspended = true;
+    try {
+      await controller.suspendInput();
+      await controller.beginControl();
+    } finally {
+      controller.resumeInput();
+      router.suspended = false;
+      busy = false;
+      _notify();
+    }
+  }
+
+  Future<void> returnToLocal() async {
+    final controller = active?.controller;
+    if (!serving || busy || controller == null) return;
+    busy = true;
+    router.suspended = true;
+    try {
+      await controller.suspendInput();
+      await controller.returnToLocal();
+    } finally {
+      controller.resumeInput();
+      router.suspended = false;
       busy = false;
       _notify();
     }
@@ -116,7 +180,12 @@ class LanWorkspace extends ChangeNotifier {
   Future<void> add(LanDevice device, String key, PeerSide side,
       {double offset = 0}) async {
     if (!running || !serving || busy || _stopping) return;
-    if (computers.containsKey(device.id)) return;
+    final previous = computers[device.id];
+    if (previous != null) {
+      if (previous.controller.connected || previous.controller.busy) return;
+      await remove(device.id);
+      if (!running || !serving || busy || _stopping) return;
+    }
     if (computers.length >= 16) throw StateError('最多同时加入 16 台客户端');
     busy = true;
     error = null;

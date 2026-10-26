@@ -9,6 +9,13 @@ import 'package:lan_bridge/core/lan_discovery.dart';
 import 'package:lan_bridge/core/secure_transport.dart';
 
 class _PreviewController extends BridgeController {
+  @override
+  Future<void> listen({bool discoveredClient = false}) async {
+    pairingKey = '123456';
+    phase = ConnectionPhase.listening;
+    notifyListeners();
+  }
+
   void setControl(BridgeRole nextRole, bool active, {bool connected = true}) {
     role = nextRole;
     remoteActive = active;
@@ -42,11 +49,67 @@ class _ConnectedPreviewController extends _PreviewController {
 }
 
 class _PreviewDiscovery extends LanDiscovery {
+  LanDevice? requested;
+  @override
+  void requestConnection(LanDevice device) {
+    requested = device;
+  }
+
   @override
   Future<void> start({int port = LanDiscovery.discoveryPort}) async {}
 }
 
 void main() {
+  testWidgets(
+      'client starts from home, requests a server and can approve control',
+      (tester) async {
+    tester.view.physicalSize = const Size(1000, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final discovery = _PreviewDiscovery();
+    final controller = _PreviewController();
+    final workspace = LanWorkspace(controller, discovery: discovery);
+    await tester
+        .pumpWidget(MaterialApp(home: BridgeDashboard(workspace: workspace)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('启动客户端'));
+    await tester.pumpAndSettle();
+    expect(controller.role, BridgeRole.target);
+    expect(find.text('123456'), findsOneWidget);
+    final serverId = generatePairingKey();
+    final metadata = <String, dynamic>{
+      'op': 'server',
+      'id': serverId,
+      'name': '键鼠电脑',
+      'platform': 'windows',
+      'port': 24872,
+      'busy': false,
+    };
+    discovery.ingest(metadata, '192.168.1.2', DateTime.now());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('申请加入'));
+    expect(discovery.requested!.id, serverId);
+    discovery.ingest({
+      ...metadata,
+      'op': 'request',
+      'kind': 'control',
+      'target': discovery.id,
+      'request': generatePairingKey()
+    }, '192.168.1.2', DateTime.now());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('允许控制'));
+    await tester.pumpAndSettle();
+    expect(discovery.incomingRequests.values.single.status, 'accepted');
+    expect(find.text('已同意，请将本机 PIN 告知服务端完成配对'), findsOneWidget);
+    expect(controller.connected, isFalse);
+    controller.setControl(BridgeRole.target, false);
+    await tester.pumpAndSettle();
+    expect(find.text('离开服务端'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('tray follows actual control ownership and disconnect recovery',
       (tester) async {
     const channel = MethodChannel('lan_bridge/lifecycle');
@@ -126,13 +189,11 @@ void main() {
       'busy': false
     }, '192.168.1.55', DateTime.now());
     await tester.pumpAndSettle();
-    expect(find.text('设计电脑'), findsOneWidget);
+    expect(find.text('设计电脑'), findsNWidgets(2));
     expect(workspace.computers, isEmpty);
-    final canvas = find.byType(DragTarget<LanDevice>);
-    final targetBox = tester.getRect(canvas);
-    final card = tester.getCenter(find.text('设计电脑'));
-    await tester.dragFrom(card, targetBox.center - card,
-        kind: PointerDeviceKind.mouse);
+    await tester.tap(find.text('申请控制'));
+    expect(discovery.requested!.name, '设计电脑');
+    await tester.tap(find.text('已有 PIN，直接连接'));
     await tester.pumpAndSettle();
     expect(find.text('客户端 PIN 码'), findsOneWidget);
     await tester.tap(find.text('取消'));
@@ -143,7 +204,7 @@ void main() {
   });
 
   testWidgets(
-      'layout can change and settings combine computer and connection roles',
+      'startup choices stay on home and connection preferences stay in settings',
       (tester) async {
     tester.view.physicalSize = const Size(800, 1000);
     tester.view.devicePixelRatio = 1;
@@ -161,16 +222,14 @@ void main() {
         kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
     expect(controller.side, PeerSide.top);
+    expect(find.text('启动服务端'), findsOneWidget);
+    expect(find.text('启动客户端'), findsOneWidget);
     expect(find.text('连接设置'), findsNothing);
     await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
     expect(find.text('连接设置'), findsOneWidget);
-    final client = find.text('客户端 · 被控电脑');
-    await tester.ensureVisible(client);
-    await tester.tap(client);
-    await tester.pumpAndSettle();
-    expect(controller.connectionMode, ConnectionMode.client);
-    expect(controller.role, BridgeRole.target);
+    expect(find.text('常规设置'), findsOneWidget);
+    expect(find.text('客户端 · 被控电脑'), findsNothing);
     expect(find.text('允许被发现'), findsNothing);
     await tester.tap(find.text('完成'));
     await tester.pumpAndSettle();
@@ -191,7 +250,7 @@ void main() {
           MaterialApp(home: BridgeDashboard(controller: _PreviewController())));
       await tester.pumpAndSettle();
       expect(find.text('LAN Bridge'), findsOneWidget);
-      expect(find.text('开始协作'), findsNothing);
+      expect(find.text('开始协作'), findsOneWidget);
       expect(find.text('屏幕布局'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     });

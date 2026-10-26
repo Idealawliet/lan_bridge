@@ -77,6 +77,56 @@ Future<void> until(bool Function() predicate) async {
 }
 
 void main() {
+  test('server controls and releases a client; client leaves and can rejoin',
+      () async {
+    final hostInput = FakeNative(), clientInput = FakeNative();
+    final host = BridgeController(input: hostInput, enableSharing: false);
+    final client =
+        BridgeController(input: clientInput, enableSharing: false, port: 0);
+    final server = LanWorkspace(host,
+        input: hostInput, discovery: FakeDiscovery(), enableSharing: false);
+    final target = LanWorkspace(client,
+        input: clientInput, discovery: FakeDiscovery(), enableSharing: false);
+    addTearDown(() async {
+      await server.close();
+      await target.close();
+      host.dispose();
+      client.dispose();
+      await hostInput.bus.close();
+      await clientInput.bus.close();
+    });
+    await server.startServer();
+    await target.startClient();
+    expect(server.discovery.advertisement!()['op'], 'server');
+    final device = LanDevice(
+        id: generatePairingKey(),
+        name: 'client',
+        platform: 'test',
+        host: '127.0.0.1',
+        port: client.port,
+        busy: false,
+        seen: DateTime.now());
+    await server.add(device, client.pairingKey, PeerSide.right);
+    await until(() => client.connected);
+    await server.control(device.id);
+    await until(() => client.remoteActive);
+    expect(hostInput.remote, isTrue);
+    await server.returnToLocal();
+    expect(client.connected, isTrue);
+    expect(client.remoteActive, isFalse);
+    await target.leaveServer();
+    await until(() => !server.computers[device.id]!.controller.connected);
+    expect(target.running, isTrue);
+    expect(client.listening, isTrue);
+    expect(clientInput.cursorVisible, isTrue);
+    await server.add(device, client.pairingKey, PeerSide.left);
+    await until(() => client.connected);
+    expect(server.computers.length, 1);
+    await server.remove(device.id);
+    await until(() => client.listening && !target.busy);
+    expect(server.running, isTrue);
+  });
+
   test('client starts discovery automatically and waits again after disconnect',
       () async {
     final input = FakeNative();

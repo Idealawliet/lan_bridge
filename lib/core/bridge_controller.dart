@@ -283,6 +283,31 @@ class BridgeController extends ChangeNotifier {
     _heldButtons.clear();
   }
 
+  Future<void> beginControl() async {
+    if (!connected || role != BridgeRole.source || _remote == null) {
+      throw StateError('请先连接客户端');
+    }
+    if (remoteActive) return;
+    if (sharingBusy) throw StateError('请先完成文件传输');
+    final epoch = _epoch;
+    await _input.setRemoteCapture(true);
+    if (epoch != _epoch || !connected) {
+      await _input.setRemoteCapture(false);
+      return;
+    }
+    _remoteX = _remote!.x + (_remote!.width - 1) / 2;
+    _remoteY = _remote!.y + (_remote!.height - 1) / 2;
+    try {
+      await _setRemoteActive(true);
+      await _peer?.send({'type': 'enter', 'x': _remoteX, 'y': _remoteY});
+      _notify();
+    } catch (_) {
+      await _input.setRemoteCapture(false);
+      await _setRemoteActive(false);
+      rethrow;
+    }
+  }
+
   Future<void> refreshFileEdge() async {
     if (connected && enableSharing) await _configureEdge();
   }
