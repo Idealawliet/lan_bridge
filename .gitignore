@@ -1,0 +1,13 @@
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.idea/
+build/
+dist/
+*.iml
+**/Flutter/ephemeral/
+**/flutter/ephemeral/
+**/Pods/
+**/.symlinks/
+**/xcuserdata/
+.DS_Store
