@@ -419,7 +419,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
         Row(children: [
           Expanded(
               child: Text(workspace.serving
-                  ? '服务端 · 已连接 ${workspace.computers.length} 台客户端'
+                  ? '服务端 · 已连接 ${workspace.computers.values.where((m) => m.controller.connected).length} 台客户端'
                   : '客户端 · ${_localBridge.connected ? '已加入服务端' : _localBridge.statusText}')),
           TextButton(
             onPressed:
@@ -635,30 +635,38 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     final nodes = multi
         ? [
             for (final m in _workspace.computers.values)
-              ScreenNode(m.device.id, m.device.name, m.controller.side,
-                  m.controller.screenOffset,
-                  selected: _workspace.active == m,
-                  controlling: m.controller.remoteActive)
+              if (m.controller.connected)
+                ScreenNode(m.device.id, m.device.name, m.controller.side,
+                    m.controller.screenOffset,
+                    selected: _workspace.active == m,
+                    controlling: m.controller.remoteActive)
           ]
-        : [
-            ScreenNode(
-                'local-peer',
-                _bridge.role == BridgeRole.target ? '本机 · 被控电脑' : '被控电脑',
-                _bridge.side,
-                _bridge.screenOffset,
-                controlling: _bridge.remoteActive)
-          ];
+        : _bridge.connected
+            ? [
+                ScreenNode(
+                    'local-peer',
+                    _bridge.role == BridgeRole.target ? '本机 · 被控电脑' : '被控电脑',
+                    _bridge.side,
+                    _bridge.screenOffset,
+                    controlling: _bridge.remoteActive)
+              ]
+            : <ScreenNode>[];
     return _Panel(
         child: Column(children: [
       ScreenWorkspace(
         nodes: nodes,
         referenceActive: !_bridge.remoteActive,
-        referenceName:
-            _bridge.role == BridgeRole.target ? '键鼠主机 · 另一台电脑' : '本机 · 键鼠主机',
+        referenceName: _bridge.role == BridgeRole.target
+            ? _bridge.connected
+                ? '键鼠主机 · 另一台电脑'
+                : '本机 · 被控电脑'
+            : '本机 · 键鼠主机',
         available: multi
             ? _workspace.discovery.devices.values
                 .where((d) =>
-                    !d.isServer && !_workspace.computers.containsKey(d.id))
+                    !d.isServer &&
+                    !(_workspace.computers[d.id]?.controller.connected ??
+                        false))
                 .toList()
             : [],
         enabled: multi

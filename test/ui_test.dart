@@ -7,6 +7,7 @@ import 'package:lan_bridge/main.dart';
 import 'package:lan_bridge/core/lan_workspace.dart';
 import 'package:lan_bridge/core/lan_discovery.dart';
 import 'package:lan_bridge/core/secure_transport.dart';
+import 'package:lan_bridge/screen_workspace.dart';
 
 class _PreviewController extends BridgeController {
   @override
@@ -59,7 +60,55 @@ class _PreviewDiscovery extends LanDiscovery {
   Future<void> start({int port = LanDiscovery.discoveryPort}) async {}
 }
 
+class _PreviewWorkspace extends LanWorkspace {
+  _PreviewWorkspace(super.local) : super(discovery: _PreviewDiscovery());
+  void refreshLayout() => notifyListeners();
+}
+
 void main() {
+  testWidgets(
+      'layout only shows real connected clients before start, after leave and after stop',
+      (tester) async {
+    final workspace = _PreviewWorkspace(_PreviewController());
+    await tester
+        .pumpWidget(MaterialApp(home: BridgeDashboard(workspace: workspace)));
+    await tester.pumpAndSettle();
+    ScreenWorkspace layout() =>
+        tester.widget<ScreenWorkspace>(find.byType(ScreenWorkspace));
+    expect(layout().nodes, isEmpty);
+    expect(find.byKey(const ValueKey('screen-local-peer')), findsNothing);
+    await tester.tap(find.text('启动服务端'));
+    await tester.pumpAndSettle();
+    expect(layout().nodes, isEmpty);
+    expect(find.text('服务端 · 已连接 0 台客户端'), findsOneWidget);
+    final client = _PreviewController()..setControl(BridgeRole.source, false);
+    final device = LanDevice(
+        id: 'real-client',
+        name: '真实客户端',
+        platform: 'test',
+        host: '192.168.1.2',
+        port: 24872,
+        busy: false,
+        seen: DateTime.now());
+    workspace.computers[device.id] = ControlledComputer(device, client);
+    workspace.refreshLayout();
+    await tester.pumpAndSettle();
+    expect(layout().nodes.map((node) => node.id), ['real-client']);
+    expect(find.text('服务端 · 已连接 1 台客户端'), findsOneWidget);
+    client.setControl(BridgeRole.source, false, connected: false);
+    workspace.refreshLayout();
+    await tester.pumpAndSettle();
+    expect(layout().nodes, isEmpty);
+    expect(find.byKey(const ValueKey('screen-real-client')), findsNothing);
+    expect(find.text('服务端 · 已连接 0 台客户端'), findsOneWidget);
+    await workspace.stop();
+    await tester.pumpAndSettle();
+    expect(layout().nodes, isEmpty);
+    expect(find.byKey(const ValueKey('screen-local-peer')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets(
       'client starts from home, requests a server and can approve control',
       (tester) async {
@@ -77,6 +126,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.role, BridgeRole.target);
     expect(find.text('123456'), findsOneWidget);
+    final layout = tester.widget<ScreenWorkspace>(find.byType(ScreenWorkspace));
+    expect(layout.nodes, isEmpty);
+    expect(layout.referenceName, '本机 · 被控电脑');
     final serverId = generatePairingKey();
     final metadata = <String, dynamic>{
       'op': 'server',
@@ -214,14 +266,7 @@ void main() {
     await tester
         .pumpWidget(MaterialApp(home: BridgeDashboard(controller: controller)));
     await tester.pumpAndSettle();
-    final target = find.byKey(const ValueKey('screen-local-peer'));
-    await tester.ensureVisible(target);
-    await tester.pumpAndSettle();
-    final size = tester.getSize(target);
-    await tester.drag(target, Offset(-size.width, -size.height),
-        kind: PointerDeviceKind.mouse);
-    await tester.pumpAndSettle();
-    expect(controller.side, PeerSide.top);
+    expect(find.byKey(const ValueKey('screen-local-peer')), findsNothing);
     expect(find.text('启动服务端'), findsOneWidget);
     expect(find.text('启动客户端'), findsOneWidget);
     expect(find.text('连接设置'), findsNothing);
