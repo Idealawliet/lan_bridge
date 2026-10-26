@@ -119,6 +119,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
       await _prepareQuit();
       return AppExitResponse.exit;
     });
+    _updateTray();
     unawaited(_initialize());
   }
 
@@ -132,7 +133,30 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     if (mounted) setState(() => _initializing = false);
   }
 
+  String? _lastTrayStatus;
+  void _updateTray() {
+    final bridge = _bridge;
+    final control = bridge.connected && bridge.remoteActive
+        ? bridge.role == BridgeRole.target
+            ? '本机正被远端控制'
+            : '正在控制远端：${_workspace.active?.device.name ?? bridge.peerAddress ?? "远端电脑"}'
+        : bridge.connected && bridge.role == BridgeRole.target
+            ? '当前控制：远端主机（非本机）'
+            : '正在控制本机';
+    final signal = !bridge.connected
+        ? '未连接'
+        : bridge.latencyMs == null
+            ? '信号：测量中'
+            : '延迟 ${bridge.latencyMs!.round()} ms · 抖动 ${bridge.jitterMs.round()} ms';
+    final key = '$control|$signal|${bridge.signalBars}';
+    if (_lastTrayStatus == key) return;
+    _lastTrayStatus = key;
+    unawaited(_desktopLifecycle.updateStatus(
+        control: control, signal: signal, bars: bridge.signalBars ?? 0));
+  }
+
   void _refresh() {
+    _updateTray();
     if (mounted) setState(() {});
   }
 

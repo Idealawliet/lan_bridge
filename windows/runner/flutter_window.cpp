@@ -8,6 +8,14 @@ namespace {
 constexpr UINT kTray = WM_APP + 41;
 constexpr UINT kQuitReady = WM_APP + 42;
 constexpr UINT kShow = 1, kQuit = 2;
+std::wstring Wide(const std::string& text) {
+  const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(),
+      static_cast<int>(text.size()), nullptr, 0);
+  std::wstring value(size, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+      value.data(), size);
+  return value;
+}
 const UINT kTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 }
 
@@ -38,6 +46,26 @@ bool FlutterWindow::OnCreate() {
   lifecycle_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       flutter_controller_->engine()->messenger(), "lan_bridge/lifecycle",
       &flutter::StandardMethodCodec::GetInstance());
+  lifecycle_->SetMethodCallHandler([this](const auto& call, auto result) {
+    if (call.method_name() != "updateStatus") { result->NotImplemented(); return; }
+    const auto* args = call.arguments()
+        ? std::get_if<flutter::EncodableMap>(call.arguments()) : nullptr;
+    if (!args) { result->Error("arguments", "Expected status map"); return; }
+    const auto control = args->find(flutter::EncodableValue("control"));
+    const auto signal = args->find(flutter::EncodableValue("signal"));
+    const auto bars = args->find(flutter::EncodableValue("bars"));
+    if (control == args->end() || signal == args->end() || bars == args->end() ||
+        !std::holds_alternative<std::string>(control->second) ||
+        !std::holds_alternative<std::string>(signal->second) ||
+        !std::holds_alternative<int32_t>(bars->second)) {
+      result->Error("arguments", "Invalid status fields"); return;
+    }
+    control_status_ = Wide(std::get<std::string>(control->second));
+    signal_status_ = Wide(std::get<std::string>(signal->second));
+    signal_bars_ = std::get<int32_t>(bars->second);
+    UpdateTray();
+    result->Success();
+  });
   AddTray();
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -59,7 +87,51 @@ void FlutterWindow::AddTray() {
   icon.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON));
   lstrcpynW(icon.szTip, L"LAN Bridge", ARRAYSIZE(icon.szTip));
   tray_ready_ = Shell_NotifyIconW(NIM_ADD, &icon) != FALSE;
+  if (tray_ready_) UpdateTray();
   if (!tray_ready_ && !IsWindowVisible(GetHandle())) OpenWindow();
+}
+void FlutterWindow::UpdateTray() {
+  if (!tray_ready_) return;
+  NOTIFYICONDATAW icon{}; icon.cbSize = sizeof(icon); icon.hWnd = GetHandle();
+  icon.uID = 1; icon.uFlags = NIF_TIP;
+  const auto tip = control_status_ + L"\n" + signal_status_;
+  lstrcpynW(icon.szTip, tip.c_str(), ARRAYSIZE(icon.szTip));
+  // Render the measured connection quality into the tray icon itself.
+  HDC screen = GetDC(nullptr);
+  HDC dc = CreateCompatibleDC(screen);
+  HBITMAP color = CreateCompatibleBitmap(screen, 32, 32);
+  HBITMAP mask = CreateBitmap(32, 32, 1, 1, nullptr);
+  if (dc && color && mask) {
+    const auto old = SelectObject(dc, color);
+    RECT bounds{0, 0, 32, 32};
+    FillRect(dc, &bounds, GetSysColorBrush(COLOR_WINDOW));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(99, 91, 219));
+    RECT badge{0, 0, 32, 14};
+    DrawTextW(dc, control_status_ == L"正在控制本机" ||
+        control_status_ == L"本机正被远端控制" ? L"L" : L"R",
+        -1, &badge, DT_CENTER | DT_SINGLELINE);
+    for (int i = 0; i < 4; ++i) {
+      RECT bar{2 + i * 8, 28 - i * 4, 7 + i * 8, 30};
+      HBRUSH brush = CreateSolidBrush(i < signal_bars_
+          ? RGB(99, 91, 219) : RGB(170, 170, 170));
+      FillRect(dc, &bar, brush); DeleteObject(brush);
+    }
+    SelectObject(dc, mask);
+    PatBlt(dc, 0, 0, 32, 32, BLACKNESS);
+    SelectObject(dc, old);
+    ICONINFO info{}; info.fIcon = TRUE; info.hbmMask = mask; info.hbmColor = color;
+    HICON meter = CreateIconIndirect(&info);
+    if (meter) {
+      icon.uFlags |= NIF_ICON; icon.hIcon = meter;
+      Shell_NotifyIconW(NIM_MODIFY, &icon);
+      DestroyIcon(meter);
+    } else { Shell_NotifyIconW(NIM_MODIFY, &icon); }
+  } else { Shell_NotifyIconW(NIM_MODIFY, &icon); }
+  if (color) DeleteObject(color);
+  if (mask) DeleteObject(mask);
+  if (dc) DeleteDC(dc);
+  if (screen) ReleaseDC(nullptr, screen);
 }
 void FlutterWindow::OpenWindow() {
   ShowWindow(GetHandle(), IsIconic(GetHandle()) ? SW_RESTORE : SW_SHOW);
@@ -114,6 +186,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (lparam == WM_LBUTTONUP || lparam == WM_LBUTTONDBLCLK) OpenWindow();
     if (lparam == WM_RBUTTONUP || lparam == WM_CONTEXTMENU) {
       HMENU menu = CreatePopupMenu();
+      AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, control_status_.c_str());
+      AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, signal_status_.c_str());
+      AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
       AppendMenuW(menu, MF_STRING, kShow, L"打开 LAN Bridge");
       AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
       AppendMenuW(menu, MF_STRING | (quit_pending_ ? MF_GRAYED : 0), kQuit, L"退出");

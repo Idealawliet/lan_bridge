@@ -21,5 +21,22 @@ class DesktopLifecycle {
     });
   }
 
+  Future<void> updateStatus(
+      {required String control,
+      required String signal,
+      required int bars}) async {
+    try {
+      await channel.invokeMethod<void>('updateStatus', {
+        'control': control,
+        'signal': signal,
+        'bars': bars,
+      });
+    } on MissingPluginException {
+      // Tests and unsupported desktop platforms have no tray host.
+    } on PlatformException {
+      // Tray availability must never interrupt input forwarding.
+    }
+  }
+
   void dispose() => channel.setMethodCallHandler(null);
 }

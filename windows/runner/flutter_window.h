@@ -28,6 +28,10 @@ class FlutterWindow : public Win32Window {
  private:
   void AddTray();
   void OpenWindow();
+  void UpdateTray();
+  std::wstring control_status_ = L"正在控制本机";
+  std::wstring signal_status_ = L"未连接";
+  int signal_bars_ = 0;
   void RequestQuit();
   bool tray_ready_ = false;
   bool quit_pending_ = false;

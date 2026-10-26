@@ -21,6 +21,24 @@ void main() {
     return reply.future;
   }
 
+  test('status publishes control ownership and measured signal to native host',
+      () async {
+    MethodCall? received;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      received = call;
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final lifecycle = DesktopLifecycle(() async {}, channel: channel);
+    await lifecycle.updateStatus(
+        control: '正在控制本机', signal: '延迟 12 ms · 抖动 2 ms', bars: 4);
+    expect(received?.method, 'updateStatus');
+    expect(received?.arguments,
+        {'control': '正在控制本机', 'signal': '延迟 12 ms · 抖动 2 ms', 'bars': 4});
+  });
+
   test('native quit waits for service cleanup and coalesces repeated requests',
       () async {
     final gate = Completer<void>();

@@ -135,6 +135,21 @@ class BridgeController extends ChangeNotifier {
   StreamSubscription<SecurePeer>? _accept;
   StreamSubscription<Map<String, dynamic>>? _incoming, _capture;
   Timer? _timer;
+  final Stopwatch _networkClock = Stopwatch()..start();
+  int _probeSequence = 0;
+  int? _probeId, _probeStarted;
+  double? latencyMs;
+  double jitterMs = 0;
+  int? get signalBars => !connected || latencyMs == null
+      ? null
+      : latencyMs! + jitterMs < 40
+          ? 4
+          : latencyMs! + jitterMs < 100
+              ? 3
+              : latencyMs! + jitterMs < 200
+                  ? 2
+                  : 1;
+
   DateTime _lastMessage = DateTime.now();
   DateTime _crossAfter = DateTime.fromMillisecondsSinceEpoch(0);
   double _remoteX = 0, _remoteY = 0;
@@ -615,7 +630,20 @@ class BridgeController extends ChangeNotifier {
         throw const SocketException('心跳超时');
       }
       await _input.heartbeat();
-      if (connected) await _peer?.send({'type': 'heartbeat'});
+      if (connected) {
+        // One outstanding probe bounds memory and keeps delayed replies useful.
+        if (_probeId == null ||
+            _networkClock.elapsedMilliseconds - _probeStarted! > 2000) {
+          if (_probeId != null) {
+            latencyMs = null;
+            jitterMs = 0;
+            _notify();
+          }
+          _probeId = ++_probeSequence;
+          _probeStarted = _networkClock.elapsedMilliseconds;
+        }
+        await _peer?.send({'type': 'heartbeat', 'probe': _probeId});
+      }
     } catch (e) {
       await _fail('连接失去响应，已恢复本机：$e', epoch);
     } finally {
@@ -757,7 +785,25 @@ class BridgeController extends ChangeNotifier {
       _notify();
       return;
     }
-    if (message['type'] == 'heartbeat') return;
+    if (message['type'] == 'heartbeat') {
+      final ack = message['ack'];
+      if (ack is int && ack == _probeId && _probeStarted != null) {
+        final sample =
+            (_networkClock.elapsedMilliseconds - _probeStarted!).toDouble();
+        jitterMs = latencyMs == null
+            ? 0
+            : jitterMs * .75 + (sample - latencyMs!).abs() * .25;
+        latencyMs = sample;
+        _probeId = null;
+        _probeStarted = null;
+        _notify();
+      }
+      final probe = message['probe'];
+      if (probe is int) {
+        await _peer?.send({'type': 'heartbeat', 'ack': probe});
+      }
+      return;
+    }
     if (message['type'] == 'share' && files != null) {
       if (message['op'] == 'offer' && message['drag'] == true) {
         _dragWaiting = true;
@@ -1023,6 +1069,10 @@ class BridgeController extends ChangeNotifier {
     }
     _leaveAck = null;
     _timer?.cancel();
+    _probeId = null;
+    _probeStarted = null;
+    latencyMs = null;
+    jitterMs = 0;
     _dragTimeout?.cancel();
     _dragWaiting = false;
     _receivingNativeDrag = false;

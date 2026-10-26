@@ -11,6 +11,21 @@ import 'package:lan_bridge/core/screen_layout.dart';
 import 'package:lan_input/lan_input.dart';
 
 void main() {
+  test('heartbeat measures round trip and resets signal on disconnect',
+      () async {
+    final pair = await _Controllers.open();
+    addTearDown(pair.close);
+    await _until(
+        () => pair.source.latencyMs != null && pair.target.latencyMs != null);
+    expect(pair.source.latencyMs, greaterThanOrEqualTo(0));
+    expect(pair.source.signalBars, inInclusiveRange(1, 4));
+    expect(pair.source.jitterMs, greaterThanOrEqualTo(0));
+    await pair.source.disconnect();
+    expect(pair.source.latencyMs, isNull);
+    expect(pair.source.signalBars, isNull);
+    expect(pair.source.jitterMs, 0);
+  });
+
   test(
       'inactive target hides cursor and restores it on enter, leave and disconnect',
       () async {

@@ -1,5 +1,6 @@
 import 'dart:ui' show PointerDeviceKind;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lan_bridge/core/bridge_controller.dart';
 import 'package:lan_bridge/main.dart';
@@ -8,6 +9,13 @@ import 'package:lan_bridge/core/lan_discovery.dart';
 import 'package:lan_bridge/core/secure_transport.dart';
 
 class _PreviewController extends BridgeController {
+  void setControl(BridgeRole nextRole, bool active, {bool connected = true}) {
+    role = nextRole;
+    remoteActive = active;
+    phase = connected ? ConnectionPhase.connected : ConnectionPhase.idle;
+    notifyListeners();
+  }
+
   @override
   Future<void> initialize() async {
     supported = true;
@@ -39,6 +47,43 @@ class _PreviewDiscovery extends LanDiscovery {
 }
 
 void main() {
+  testWidgets('tray follows actual control ownership and disconnect recovery',
+      (tester) async {
+    const channel = MethodChannel('lan_bridge/lifecycle');
+    final statuses = <Map<Object?, Object?>>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'updateStatus') {
+        statuses.add(Map<Object?, Object?>.from(call.arguments as Map));
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final controller = _PreviewController();
+    await tester
+        .pumpWidget(MaterialApp(home: BridgeDashboard(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(statuses.last['control'], '正在控制本机');
+    controller.setControl(BridgeRole.source, false);
+    await tester.pumpAndSettle();
+    expect(statuses.last['control'], '正在控制本机');
+    controller.setControl(BridgeRole.source, true);
+    await tester.pumpAndSettle();
+    expect(statuses.last['control'], startsWith('正在控制远端：'));
+    controller.setControl(BridgeRole.target, true);
+    await tester.pumpAndSettle();
+    expect(statuses.last['control'], '本机正被远端控制');
+    controller.setControl(BridgeRole.target, false);
+    await tester.pumpAndSettle();
+    expect(statuses.last['control'], '当前控制：远端主机（非本机）');
+    controller.setControl(BridgeRole.source, false, connected: false);
+    await tester.pumpAndSettle();
+    expect(statuses.last, {'control': '正在控制本机', 'signal': '未连接', 'bars': 0});
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('connected source keeps screen dragging enabled', (tester) async {
     tester.view.physicalSize = const Size(1000, 900);
     tester.view.devicePixelRatio = 1;
