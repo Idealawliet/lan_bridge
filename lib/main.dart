@@ -25,7 +25,8 @@ void main() {
 }
 
 class LanBridgeApp extends StatelessWidget {
-  const LanBridgeApp({super.key});
+  const LanBridgeApp({super.key, this.home});
+  final Widget? home;
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +80,7 @@ class LanBridgeApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const BridgeDashboard(),
+      home: home ?? const BridgeDashboard(),
     );
   }
 }
@@ -215,6 +216,10 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                       children: [
                         _header(),
                         if (_updates.available != null &&
+                            _updates.available!.version.compareTo(
+                                    ReleaseVersion.parse(
+                                        _updates.currentVersion)!) >
+                                0 &&
                             _dismissedUpdate != _updates.available!.tag) ...[
                           const SizedBox(height: 16),
                           _updateBanner(),
@@ -745,6 +750,28 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
               ? null
               : (value) => unawaited(_updates.setAutoCheck(value))),
       Text(_updates.supported ? _updates.status : '更新支持 Windows 和 macOS'),
+      if (_updates.versions.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+            key: ValueKey('versions-${release?.tag}'),
+            initialValue: release?.tag,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: '版本管理 · 升级 / 降级 / 重装'),
+            items: [
+              for (final version in _updates.versions)
+                DropdownMenuItem(
+                    value: version.tag,
+                    child: Text(
+                        '${version.tag}${version.tag == 'v${_updates.currentVersion}' ? '（当前）' : ''}${version.prerelease ? ' · 预览版' : ''}'))
+            ],
+            onChanged: busy
+                ? null
+                : (tag) {
+                    if (tag != null) _updates.selectVersion(tag);
+                  }),
+        const Text('仅列出已发布且提供本平台安装包及校验文件的版本。两端请使用相同版本；旧版可能不具备版本校验。',
+            style: TextStyle(fontSize: 12, color: _muted)),
+      ],
       if (_updates.downloading) ...[
         const SizedBox(height: 12),
         LinearProgressIndicator(value: _updates.progress),
@@ -776,7 +803,11 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
           FilledButton.icon(
               onPressed: busy ? null : () => unawaited(_updates.download()),
               icon: const Icon(Icons.download_outlined),
-              label: const Text('下载更新')),
+              label: Text(release.version.compareTo(
+                          ReleaseVersion.parse(_updates.currentVersion)!) >
+                      0
+                  ? '下载更新'
+                  : '下载此版本')),
         if (_updates.downloading)
           TextButton(
               onPressed: _updates.cancelDownload, child: const Text('取消下载')),

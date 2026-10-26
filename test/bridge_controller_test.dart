@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:lan_bridge/core/app_version.dart';
 import 'package:lan_bridge/core/desktop_settings.dart';
 
 import 'package:flutter/services.dart';
@@ -11,6 +12,40 @@ import 'package:lan_bridge/core/screen_layout.dart';
 import 'package:lan_input/lan_input.dart';
 
 void main() {
+  for (final peerVersion in ['0.0.1', null]) {
+    test(
+        'refuses mismatched or missing software version $peerVersion before control',
+        () async {
+      final input = _FakeInput(1920, 1080);
+      final target =
+          BridgeController(input: input, enableSharing: false, port: 0);
+      await target.setRole(BridgeRole.target);
+      await target.listen();
+      final peer = await connectSecurePeer(
+          host: '127.0.0.1', port: target.port, pairingKey: target.pairingKey);
+      final subscription = peer.messages.listen((_) {});
+      addTearDown(() async {
+        await subscription.cancel();
+        await peer.close();
+        await target.disconnect();
+        target.dispose();
+        await input.close();
+      });
+      await peer.send({
+        'type': 'hello',
+        'version': 7,
+        if (peerVersion != null) 'appVersion': peerVersion,
+        'role': 'source',
+        'side': 'right',
+        'offset': 0.0,
+        'screen': {'x': 0, 'y': 0, 'width': 1920, 'height': 1080}
+      });
+      await _until(() => target.phase == ConnectionPhase.idle);
+      expect(target.error, contains('版本不一致'));
+      expect(target.connected, isFalse);
+      expect(input.injected, isEmpty);
+    });
+  }
   test('heartbeat measures round trip and resets signal on disconnect',
       () async {
     final pair = await _Controllers.open();
@@ -67,6 +102,7 @@ void main() {
     await peer.send({
       'type': 'hello',
       'version': 7,
+      'appVersion': appVersion,
       'role': 'source',
       'side': 'right',
       'offset': 0.0,
@@ -451,6 +487,7 @@ void main() {
     await peer.send({
       'type': 'hello',
       'version': 7,
+      'appVersion': appVersion,
       'role': 'source',
       'side': 'right',
       'offset': 0.0,
@@ -485,6 +522,7 @@ void main() {
     await peer.send({
       'type': 'hello',
       'version': 7,
+      'appVersion': appVersion,
       'role': 'source',
       'side': 'right',
       'offset': 0.0,

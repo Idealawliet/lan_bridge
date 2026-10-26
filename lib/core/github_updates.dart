@@ -151,6 +151,20 @@ class GitHubUpdates extends ChangeNotifier {
       _disposed = false;
   String status = '从 GitHub 检查最新发行版（含预览版）';
   AppRelease? available;
+  List<AppRelease> versions = [];
+
+  void selectVersion(String tag) {
+    if (checking || downloading) return;
+    final selected =
+        versions.where((release) => release.tag == tag).firstOrNull;
+    if (selected == null) return;
+    available = selected;
+    downloadedFile = null;
+    _downloadedHash = null;
+    status = '已选择 $tag，可下载并安装此版本';
+    _notify();
+  }
+
   File? downloadedFile;
   String? _downloadedHash;
   int received = 0;
@@ -205,7 +219,8 @@ class GitHubUpdates extends ChangeNotifier {
   }
 
   static AppRelease? selectRelease(
-      List<dynamic> releases, String os, String current) {
+      List<dynamic> releases, String os, String current,
+      {bool includeOlder = false}) {
     final installed = ReleaseVersion.parse(current);
     if (installed == null) throw const FormatException('无法识别当前版本');
     AppRelease? newest;
@@ -219,7 +234,7 @@ class GitHubUpdates extends ChangeNotifier {
       final tag = data['tag_name'] as String;
       final version = ReleaseVersion.parse(tag);
       if (version == null ||
-          version.compareTo(installed) <= 0 ||
+          (!includeOlder && version.compareTo(installed) <= 0) ||
           (newest != null && version.compareTo(newest.version) <= 0)) {
         continue;
       }
@@ -295,6 +310,14 @@ class GitHubUpdates extends ChangeNotifier {
           utf8.decode(await _read(transport, releasesUri, 8 * 1024 * 1024)));
       if (data is! List) throw const FormatException('GitHub 发行信息格式不正确');
       if (_disposed) return;
+      final catalog = <String, AppRelease>{};
+      for (final entry in data) {
+        final release = selectRelease([entry], operatingSystem, currentVersion,
+            includeOlder: true);
+        if (release != null) catalog[release.tag] = release;
+      }
+      versions = catalog.values.toList()
+        ..sort((a, b) => b.version.compareTo(a.version));
       final latest = selectRelease(data, operatingSystem, currentVersion);
       if (latest?.tag != available?.tag) {
         downloadedFile = null;

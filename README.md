@@ -2,9 +2,27 @@
 
 用同一副键盘和鼠标，在局域网内多台 Windows / macOS 电脑之间切换。Flutter（Dart）负责桌面界面、配对和加密通信；Windows C++ 与 macOS Swift 插件负责系统级输入捕获、注入和紧急恢复。
 
-这是 v0.10.0 预览版工程，包含两端源码、测试与双平台构建/发布工作流。**构建配置不等于已发布安装包**：Windows 和 macOS 客户端需要在对应系统构建，正式发行还需要平台签名、公证和双机实测。
+这是 v0.11.0 预览版工程，包含两端源码、测试与双平台构建/发布工作流。**构建配置不等于已发布安装包**：Windows 和 macOS 客户端需要在对应系统构建，正式发行还需要平台签名、公证和双机实测。
 
 v0.4.1 修复多机切换后的旧输入事件、紧急恢复后的队列残留、剪贴板暂停与失败重试，以及退出控制组的输入通道清理。详见 [缺陷修复记录](docs/bugfixes-0.4.1.md)。
+
+## 软件截图
+
+以下图片由实际 Flutter 界面渲染，连接设备与版本列表为演示数据，不代表实机连接验证。
+
+![主界面：直接启动服务端或客户端](docs/images/home.png)
+
+![服务端：设备管理与屏幕布局](docs/images/server.png)
+
+![设置：历史版本升级、降级与重装](docs/images/versions.png)
+
+## 版本一致性与版本切换（v0.11.0）
+
+控制连接的加密握手会同时核对协议和软件版本，软件版本必须完全一致；版本不同或未提供版本信息的旧客户端会被拒绝，不能进入控制或注入输入。双方需先切换至同一版本。
+
+“设置 → 软件更新”检查发行记录后，可通过“版本管理”选择 GitHub 上已提供本平台安装包及 SHA-256 文件的历史版本，进行升级、降级或重装。下载和安装仍需用户分别操作；安装时断开连接并退出。旧版本可能不具备版本校验功能，此限制无法追溯修改已经发布的旧二进制；请保持两端版本相同。
+
+鼠标发送队列取消了额外的 4 ms 定时等待，改为就绪即处理、积压时合并连续移动，保留按键和按钮顺序边界，避免系统定时器粒度增加延迟。Windows 注入设置 `MOUSEEVENTF_MOVE_NOCOALESCE`，减少系统对移动消息的再次合并。自动化压力测试覆盖输入顺序与位移保留，实际帧率和鼠标手感仍需 Windows/macOS 双机验证。
 
 ## 已实现的范围
 
@@ -24,7 +42,7 @@ v0.4.1 修复多机切换后的旧输入事件、紧急恢复后的队列残留�
 
 当前处理各电脑的**主屏幕**，每台客户端相对于服务端支持四向拼接与错位；暂不支持每台电脑的多显示器拓扑或登录前的系统后台服务。没有桌面画面传输，各电脑的屏幕都需要可见。键鼠一次只控制一台选中的客户端，不会向控制组广播相同输入。
 
-## 使用方法（v0.10.0）
+## 使用方法（v0.11.0）
 
 1. 主界面直接点击“启动服务端”或“启动客户端”。有键鼠的电脑启动服务端，需要接受控制的电脑启动客户端，无需先打开设置。
 2. 两端启动后自动发现设备。客户端显示本次 6 位 PIN；设置窗口保留连接设置、手动 IP 和开机自启。
@@ -115,7 +133,7 @@ flutter run -d windows
 ./scripts/build-windows.ps1
 ```
 
-需要额外安装 Inno Setup 6。输出 `dist/lan-bridge-windows-x64-0.10.0-setup-unsigned.exe` 安装器、便携 ZIP 及 SHA-256 文件。安装器按当前用户安装，并包含 VC++ 运行库。便携 ZIP 解压后启动 `lan_bridge.exe`；必须保留同目录的所有 DLL 和 `data` 文件夹，不可只复制 EXE。视目标系统情况，可能还需安装 Microsoft Visual C++ x64 Redistributable。
+需要额外安装 Inno Setup 6。输出 `dist/lan-bridge-windows-x64-0.11.0-setup-unsigned.exe` 安装器、便携 ZIP 及 SHA-256 文件。安装器按当前用户安装，并包含 VC++ 运行库。便携 ZIP 解压后启动 `lan_bridge.exe`；必须保留同目录的所有 DLL 和 `data` 文件夹，不可只复制 EXE。视目标系统情况，可能还需安装 Microsoft Visual C++ x64 Redistributable。
 
 macOS：
 
@@ -124,14 +142,14 @@ flutter run -d macos
 bash scripts/build-macos.sh
 ```
 
-输出 `dist/lan-bridge-macos-0.10.0-unsigned.dmg`、便携 ZIP 及 SHA-256 文件。打开 DMG 后将 LAN Bridge.app 拖入 Applications；使用 ZIP 时，解压后将 `lan_bridge.app` 移到“应用程序”。该包未经 Developer ID 发行签名与 Apple 公证；Xcode 可能生成用于本地运行的临时签名。macOS 可能阻止首次打开，应先确认来源和校验值，再按系统“隐私与安全性”中的提示处理。发行时应替换为正式签名与公证流程。
+输出 `dist/lan-bridge-macos-0.11.0-unsigned.dmg`、便携 ZIP 及 SHA-256 文件。打开 DMG 后将 LAN Bridge.app 拖入 Applications；使用 ZIP 时，解压后将 `lan_bridge.app` 移到“应用程序”。该包未经 Developer ID 发行签名与 Apple 公证；Xcode 可能生成用于本地运行的临时签名。macOS 可能阻止首次打开，应先确认来源和校验值，再按系统“隐私与安全性”中的提示处理。发行时应替换为正式签名与公证流程。
 
 ## 自动构建与发布
 
 将本目录作为 Git 仓库根目录上传到自己的 GitHub 仓库后：
 
 - `Build and publish desktop installers` 可在 Actions 页面手动运行，验证代码并在 Windows/macOS 原生 runner 上生成 EXE 安装器、DMG、便携 ZIP 和 SHA-256 文件。
-- 推送 `v0.10.0` 等与 `pubspec.yaml` 一致的版本标签时，执行同样的验证与构建；两端构建和安装包检查都成功后，自动创建 GitHub **预发布版本**并上传全部产物。
+- 推送 `v0.11.0` 等与 `pubspec.yaml` 一致的版本标签时，执行同样的验证与构建；两端构建和安装包检查都成功后，自动创建 GitHub **预发布版本**并上传全部产物。
 - 手动运行仅生成 Actions 构建产物，不创建 Release。工作流固定 Flutter 3.47.7，使用已提交的锁文件。仓库需允许 Actions 运行，发布 job 使用 `contents: write` 权限。
 - 发布说明放在 `docs/releases/<标签>.md`。安装包未经发行签名；Linux 测试、安装器静默安装/卸载、DMG 挂载与校验均不能代替双机原生输入验收。
 

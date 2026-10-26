@@ -328,7 +328,7 @@ class NativeBridge {
                                    virtual_width);
     input.mi.dy = static_cast<LONG>((y - virtual_y + 0.5) * 65536.0 /
                                    virtual_height);
-    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE |
+    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE | MOUSEEVENTF_ABSOLUTE |
                        MOUSEEVENTF_VIRTUALDESK;
     input.mi.dwExtraInfo = kInjectedTag;
     return SendInput(1, &input, sizeof(INPUT)) == 1;

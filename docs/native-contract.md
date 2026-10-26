@@ -50,4 +50,4 @@ Injection supports move `{type:'move',x,y}`, button/key/scroll as above. Clamp p
 
 文件剪贴板优先于图片预览与文本。使用已有系统 `Pasteboard.files/writeFiles`（macOS 文件 URL / Windows CF_HDROP），通过 `share` 文件流同步原字节。`offer.clipboard=true` 与 `drag=true` 互斥；剪贴板同步开启时自动接受，校验完成后写入接收方本地路径。传输中本机剪贴板发生变化或同步暂停时，不覆盖新内容。系统文件写入只在活动配对会话中执行，不传递来源端绝对路径。
 
-控制会话协议为 7；两端需一起升级。鼠标发送队列可每 4 ms 合并，接收队列仅合并相邻有效绝对鼠标位置；所有按键、按钮、滚轮、enter/leave/layout 都是不可跨越的顺序边界。
+控制会话协议为 7；v0.11.0 起 hello 必须携带与本机完全一致的 appVersion，否则拒绝会话。鼠标发送队列就绪即处理、积压时合并，不额外等待定时器；接收队列仅合并相邻有效绝对鼠标位置；所有按键、按钮、滚轮、enter/leave/layout 都是不可跨越的顺序边界。

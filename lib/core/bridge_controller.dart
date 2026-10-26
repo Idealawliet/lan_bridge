@@ -13,6 +13,7 @@ import 'screen_layout.dart';
 import 'desktop_settings.dart';
 import 'secure_transport.dart';
 import 'input_event_queue.dart';
+import 'app_version.dart';
 export 'screen_layout.dart' show PeerSide, PeerSideGeometry;
 
 enum BridgeRole { source, target }
@@ -26,6 +27,7 @@ class BridgeController extends ChangeNotifier {
       {LanInput? input,
       int port = defaultSecurePort,
       this.enableSharing = true,
+      this.softwareVersion = appVersion,
       DesktopSettings? settings,
       LoginStartup? startup,
       ClipboardAccess? clipboardAccess})
@@ -36,6 +38,7 @@ class BridgeController extends ChangeNotifier {
         _preferencesAvailable =
             settings != null || Platform.isWindows || Platform.isMacOS,
         _startup = startup ?? LoginStartup();
+  final String softwareVersion;
   final LanInput _input;
   final ClipboardAccess? _clipboardAccess;
   final DesktopSettings _settings;
@@ -174,8 +177,7 @@ class BridgeController extends ChangeNotifier {
       },
       onError: (error, stack, context) =>
           _fail('输入服务已停止：$error', context.epoch),
-      limit: 1024,
-      motionInterval: const Duration(microseconds: 4000));
+      limit: 1024);
   Future<void> suspendInput() async {
     _inputEnabled = false;
     _inputRevision++;
@@ -502,6 +504,10 @@ class BridgeController extends ChangeNotifier {
           if (messageEpoch != _epoch) return;
           if (epoch != _epoch) return;
           if (!hello.isCompleted) {
+            if (message['appVersion'] != softwareVersion) {
+              throw FormatException(
+                  '软件版本不一致：本机 $softwareVersion，对端 ${message['appVersion'] ?? '旧版或未知'}。请在版本管理中切换至相同版本');
+            }
             if (message['type'] != 'hello' ||
                 message['version'] != 7 ||
                 message['role'] !=
@@ -618,6 +624,7 @@ class BridgeController extends ChangeNotifier {
       await peer.send({
         'type': 'hello',
         'version': 7,
+        'appVersion': softwareVersion,
         'role': role.name,
         'side': side.name,
         'offset': screenOffset,

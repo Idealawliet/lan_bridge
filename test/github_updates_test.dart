@@ -53,6 +53,17 @@ UpdateResponse response(List<int> bytes, {int status = 200}) =>
     UpdateResponse(status, Stream.fromIterable([bytes]));
 
 void main() {
+  test(
+      'historical catalog supports downgrade and reinstall through verified download flow',
+      () async {
+    final releases = [release('0.8.3'), release('0.10.0'), release('0.9.1')];
+    expect(GitHubUpdates.selectRelease(releases, 'windows', '0.11.0'), isNull);
+    expect(
+        GitHubUpdates.selectRelease([releases.first], 'windows', '0.11.0',
+                includeOlder: true)!
+            .tag,
+        'v0.8.3');
+  });
   test('runtime version matches the installer package version', () {
     final spec = File('pubspec.yaml').readAsStringSync();
     expect(RegExp(r'^version: ([^+\s]+)', multiLine: true).firstMatch(spec)![1],
@@ -196,6 +207,29 @@ void main() {
             .listSync(recursive: true)
             .any((f) => f.path.endsWith('.part')),
         isFalse);
+  });
+
+  test(
+      'selecting an old version downloads exactly that release and verifies it',
+      () async {
+    serveRelease();
+    final data = [release('0.8.3'), release('0.10.0')];
+    responses[GitHubUpdates.releasesUri.toString()] =
+        () => response(utf8.encode(jsonEncode(data)));
+    final old = data.first['assets'] as List;
+    responses[old[0]['browser_download_url'] as String] =
+        () => response([1, 2, 3]);
+    responses[old[1]['browser_download_url'] as String] = () => response(
+        utf8.encode('${sha256.convert([1, 2, 3])}  ${old[0]['name']}'));
+    final updates = updater();
+    addTearDown(updates.dispose);
+    await updates.check();
+    expect(updates.versions.map((r) => r.tag), ['v0.10.0', 'v0.8.3']);
+    updates.selectVersion('v0.8.3');
+    await updates.download();
+    expect(updates.downloadedFile!.path, contains('0.8.3'));
+    await updates.openInstaller();
+    expect(launches.single.first, contains('0.8.3'));
   });
 
   test('macOS opens the verified disk image with separate arguments', () async {
