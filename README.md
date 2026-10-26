@@ -2,7 +2,7 @@
 
 用同一副键盘和鼠标，在局域网内多台 Windows / macOS 电脑之间切换。Flutter（Dart）负责桌面界面、配对和加密通信；Windows C++ 与 macOS Swift 插件负责系统级输入捕获、注入和紧急恢复。
 
-这是 v0.8.1 预览版工程，包含两端源码、测试与双平台构建/发布工作流。**构建配置不等于已发布安装包**：Windows 和 macOS 客户端需要在对应系统构建，正式发行还需要平台签名、公证和双机实测。
+这是 v0.8.2 预览版工程，包含两端源码、测试与双平台构建/发布工作流。**构建配置不等于已发布安装包**：Windows 和 macOS 客户端需要在对应系统构建，正式发行还需要平台签名、公证和双机实测。
 
 v0.4.1 修复多机切换后的旧输入事件、紧急恢复后的队列残留、剪贴板暂停与失败重试，以及退出控制组的输入通道清理。详见 [缺陷修复记录](docs/bugfixes-0.4.1.md)。
 
@@ -24,7 +24,7 @@ v0.4.1 修复多机切换后的旧输入事件、紧急恢复后的队列残留�
 
 当前处理各电脑的**主屏幕**，每台客户端相对于服务端支持四向拼接与错位；暂不支持每台电脑的多显示器拓扑或登录前的系统后台服务。没有桌面画面传输，各电脑的屏幕都需要可见。键鼠一次只控制一台选中的客户端，不会向控制组广播相同输入。
 
-## 使用方法（v0.8.1）
+## 使用方法（v0.8.2）
 
 1. 点击右上角“设置”。有键盘和鼠标的电脑选择“服务端 · 键鼠主机”，需要接受控制的电脑选择“客户端 · 被控电脑”。连接设置、手动 IP 和开机自启都在设置窗口中。
 2. 客户端点击“启动客户端”，自动加入局域网发现并显示本次 6 位 PIN 码，不再有“允许被发现”开关。
@@ -106,7 +106,7 @@ flutter run -d windows
 ./scripts/build-windows.ps1
 ```
 
-输出 `dist/lan-bridge-windows-x64-0.8.1-unsigned.zip` 及 SHA-256 文件。解压后启动 `lan_bridge.exe`；必须保留同目录的所有 DLL 和 `data` 文件夹，不可只复制 EXE。视目标系统情况，可能还需安装 Microsoft Visual C++ x64 Redistributable。
+需要额外安装 Inno Setup 6。输出 `dist/lan-bridge-windows-x64-0.8.2-setup-unsigned.exe` 安装器、便携 ZIP 及 SHA-256 文件。安装器按当前用户安装，并包含 VC++ 运行库。便携 ZIP 解压后启动 `lan_bridge.exe`；必须保留同目录的所有 DLL 和 `data` 文件夹，不可只复制 EXE。视目标系统情况，可能还需安装 Microsoft Visual C++ x64 Redistributable。
 
 macOS：
 
@@ -115,17 +115,16 @@ flutter run -d macos
 bash scripts/build-macos.sh
 ```
 
-输出 `dist/lan-bridge-macos-0.8.1-unsigned.zip` 及 SHA-256 文件，解压后将 `lan_bridge.app` 移到“应用程序”。该包未经 Developer ID 发行签名与 Apple 公证；Xcode 可能生成用于本地运行的临时签名。macOS 可能阻止首次打开，应先确认来源和校验值，再按系统“隐私与安全性”中的提示处理。发行时应替换为正式签名与公证流程。
+输出 `dist/lan-bridge-macos-0.8.2-unsigned.dmg`、便携 ZIP 及 SHA-256 文件。打开 DMG 后将 LAN Bridge.app 拖入 Applications；使用 ZIP 时，解压后将 `lan_bridge.app` 移到“应用程序”。该包未经 Developer ID 发行签名与 Apple 公证；Xcode 可能生成用于本地运行的临时签名。macOS 可能阻止首次打开，应先确认来源和校验值，再按系统“隐私与安全性”中的提示处理。发行时应替换为正式签名与公证流程。
 
 ## 自动构建与发布
 
 将本目录作为 Git 仓库根目录上传到自己的 GitHub 仓库后：
 
-- `Validate desktop clients` 在推送或 PR 时执行静态检查、测试和 Windows/macOS 原生构建。
-- 手动运行 `Package desktop clients` 生成两个系统的 ZIP 与 SHA-256 文件，在该次 Actions 运行的 Artifacts 中下载。
-- 推送 `v0.7.0` 等版本标签会执行同样检查和打包，并将产物上传为 GitHub **预发布版本**。标签版本应与 `pubspec.yaml` 一致。
-
-工作流固定 Flutter 3.47.7，并提交了 `pubspec.lock` 以锁定 Dart 依赖。仓库需要允许 Actions 运行及发布工作流写入 Release。手动运行只生成构建产物，不自动创建公开 Release。
+- `Build and publish desktop installers` 可在 Actions 页面手动运行，验证代码并在 Windows/macOS 原生 runner 上生成 EXE 安装器、DMG、便携 ZIP 和 SHA-256 文件。
+- 推送 `v0.8.2` 等与 `pubspec.yaml` 一致的版本标签时，执行同样的验证与构建；两端构建和安装包检查都成功后，自动创建 GitHub **预发布版本**并上传全部产物。
+- 手动运行仅生成 Actions 构建产物，不创建 Release。工作流固定 Flutter 3.47.7，使用已提交的锁文件。仓库需允许 Actions 运行，发布 job 使用 `contents: write` 权限。
+- 发布说明放在 `docs/releases/<标签>.md`。安装包未经发行签名；Linux 测试、安装器静默安装/卸载、DMG 挂载与校验均不能代替双机原生输入验收。
 
 正式公开发行需要自行配置 Windows Authenticode 签名、macOS Developer ID Application 签名与 Apple 公证。在 macOS 上先为应用及嵌入组件正确签名并开启适用的 Hardened Runtime，使用 `xcrun notarytool submit … --wait` 提交公证，再用 `xcrun stapler staple …` 附加票据，最后重新打包并计算校验值。证书、签名密码和公证凭据应存入 CI 的 Secrets，不能提交到仓库。当前脚本不包含发行凭据，也不会声称包已经签名。
 
