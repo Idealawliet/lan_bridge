@@ -34,6 +34,107 @@ class MemoryClipboard implements ClipboardAccess {
 }
 
 void main() {
+  test('pause and resume invalidate text waiting behind a file clipboard write',
+      () async {
+    final sourceAccess = MemoryClipboard();
+    final receiverAccess = MemoryClipboard()..writeGate = Completer<void>();
+    late ClipboardSync sender, receiver;
+    sender =
+        ClipboardSync(access: sourceAccess, send: (m) => receiver.receive(m));
+    receiver =
+        ClipboardSync(access: receiverAccess, send: (m) => sender.receive(m));
+    addTearDown(sender.close);
+    addTearDown(receiver.close);
+    await sender.start();
+    await receiver.start();
+    final applyingFiles = receiver.applyFiles(['/received/original.jpg']);
+    await Future<void>.delayed(Duration.zero);
+    sourceAccess.copy('old queued text');
+    final sendingText = sender.poll();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    receiver.setEnabled(false);
+    receiver.setEnabled(true);
+    receiverAccess.writeGate!.complete();
+    await applyingFiles;
+    await sendingText;
+    expect(receiverAccess.writes, 1);
+    expect(receiverAccess.content!.format, 'files');
+    expect(receiverAccess.content!.filePaths, ['/received/original.jpg']);
+  });
+
+  test(
+      'file clipboard wins over image previews and file names are not converted',
+      () async {
+    var imageReads = 0;
+    final paths = ['/tmp/原图.jpg', '/tmp/报告.docx', '/tmp/压缩包.zip'];
+    List<String>? written;
+    final access = SystemClipboard(() async => 1, () async => true,
+        readFiles: () async => paths,
+        readImage: () async {
+          imageReads++;
+          return Uint8List.fromList([1, 2, 3]);
+        },
+        writeFiles: (value) async {
+          written = value;
+          return true;
+        });
+    final content = await access.read();
+    expect(content!.format, 'files');
+    expect(content.filePaths, paths);
+    expect(imageReads, 0);
+    await access.write(content);
+    expect(written, paths);
+  });
+
+  test(
+      'file copies use the original-file transfer without exposing source paths on clipboard wire',
+      () async {
+    final access = MemoryClipboard();
+    final frames = <Map<String, dynamic>>[];
+    List<String>? transferred;
+    final sync = ClipboardSync(
+        access: access,
+        send: (frame) async => frames.add(frame),
+        sendFiles: (paths) async {
+          transferred = paths;
+        });
+    addTearDown(sync.close);
+    await sync.start();
+    access.content = ClipboardContent.files(['/tmp/原图.jpg', '/tmp/目录']);
+    access.rev++;
+    await sync.poll();
+    expect(transferred, ['/tmp/原图.jpg', '/tmp/目录']);
+    expect(frames, isEmpty);
+    expect(sync.status, contains('原始文件已同步'));
+    await sync.poll();
+    expect(access.writes, 0);
+  });
+
+  test(
+      'received file clipboard does not echo or overwrite newer copied content',
+      () async {
+    final access = MemoryClipboard();
+    final frames = <Map<String, dynamic>>[];
+    final sync =
+        ClipboardSync(access: access, send: (frame) async => frames.add(frame));
+    addTearDown(sync.close);
+    await sync.start();
+    expect(await sync.applyFiles(['/received/原图.jpg'], expectedRevision: 0),
+        isTrue);
+    expect(access.content!.filePaths, ['/received/原图.jpg']);
+    await sync.poll();
+    expect(frames, isEmpty);
+    final oldRevision = access.rev;
+    access.copy('刚复制的新文本');
+    expect(
+        await sync
+            .applyFiles(['/received/old.zip'], expectedRevision: oldRevision),
+        isFalse);
+    expect(utf8.decode(access.content!.bytes), '刚复制的新文本');
+    sync.setEnabled(false);
+    expect(await sync.applyFiles(['/received/old.zip']), isFalse);
+  });
+
   test('pause waits for an already-started OS clipboard write', () async {
     final ca = MemoryClipboard(),
         cb = MemoryClipboard()..writeGate = Completer<void>();

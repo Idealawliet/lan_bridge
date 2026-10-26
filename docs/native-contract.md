@@ -42,3 +42,12 @@ Injection supports move `{type:'move',x,y}`, button/key/scroll as above. Clamp p
 ## v0.7 捕获模式边界
 
 原生 `move` 增加布尔字段 `captured`：false 为本地指针坐标采样，true 为已接管的相对移动。事件合并时不能跨越该字段的变化。Dart 忽略与当前远程状态不符的移动，避免接管前积压的本地移动在进入目标后造成跳变。坐标继续使用各平台原生单位，跨屏比例与相对增量缩放由 Dart 统一处理。
+
+
+## v0.8.1 光标与文件剪贴板
+
+`setCursorVisible({visible: bool})` 控制本机显示状态，与来源端 `setRemoteCapture` 的捕获状态分开。客户端已连接但未接管时隐藏，`enter` 后显示，`leave` 后隐藏；停止捕获、断线、紧急恢复、原生心跳超时均恢复。来源端远程捕获仍优先隐藏本地光标。
+
+文件剪贴板优先于图片预览与文本。使用已有系统 `Pasteboard.files/writeFiles`（macOS 文件 URL / Windows CF_HDROP），通过 `share` 文件流同步原字节。`offer.clipboard=true` 与 `drag=true` 互斥；剪贴板同步开启时自动接受，校验完成后写入接收方本地路径。传输中本机剪贴板发生变化或同步暂停时，不覆盖新内容。系统文件写入只在活动配对会话中执行，不传递来源端绝对路径。
+
+控制会话协议为 7；两端需一起升级。鼠标发送队列可每 4 ms 合并，接收队列仅合并相邻有效绝对鼠标位置；所有按键、按钮、滚轮、enter/leave/layout 都是不可跨越的顺序边界。

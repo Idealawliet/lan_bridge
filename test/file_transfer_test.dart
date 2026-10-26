@@ -5,6 +5,46 @@ import 'package:lan_bridge/sharing/file_transfer.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('clipboard transfers keep original extensions, bytes and directories',
+      () async {
+    final root = await Directory.systemTemp.createTemp('lan-file-clipboard-');
+    addTearDown(() => root.delete(recursive: true));
+    final originals = await Directory(p.join(root.path, 'source')).create();
+    final data = List.generate(20001, (i) => i % 253);
+    final jpg = await File(p.join(originals.path, '原图.jpg')).writeAsBytes(data);
+    final doc = await File(p.join(originals.path, '报告.docx'))
+        .writeAsBytes([80, 75, 3, 4, 1]);
+    final folder = await Directory(p.join(originals.path, '目录')).create();
+    await Directory(p.join(folder.path, '空目录')).create();
+    await File(p.join(folder.path, '压缩包.zip')).writeAsBytes([80, 75, 3, 4, 2]);
+    List<String>? copied;
+    late FileTransfer sender, receiver;
+    receiver = FileTransfer(
+        send: (m) => sender.receive(m),
+        receiveDirectory: () async => Directory(p.join(root.path, 'received')),
+        onClipboardOffered: () async => true,
+        onClipboardReceived: (paths) async {
+          copied = paths;
+        });
+    sender = FileTransfer(
+        send: (m) => receiver.receive(m), receiveDirectory: () async => root);
+    addTearDown(sender.close);
+    addTearDown(receiver.close);
+    await sender.sendPaths([jpg.path, doc.path, folder.path], clipboard: true);
+    expect(
+        copied!.map(p.basename), unorderedEquals(['原图.jpg', '报告.docx', '目录']));
+    final receivedJpg = copied!.firstWhere((path) => path.endsWith('.jpg'));
+    expect(await File(receivedJpg).readAsBytes(), data);
+    final receivedDoc = copied!.firstWhere((path) => path.endsWith('.docx'));
+    expect(await File(receivedDoc).readAsBytes(), await doc.readAsBytes());
+    final receivedFolder =
+        copied!.firstWhere((path) => p.basename(path) == '目录');
+    expect(await Directory(p.join(receivedFolder, '空目录')).exists(), isTrue);
+    expect(await File(p.join(receivedFolder, '压缩包.zip')).readAsBytes(),
+        [80, 75, 3, 4, 2]);
+    expect(await jpg.exists(), isTrue);
+  });
+
   test(
       'streams nested files, zero byte files and empty folders without overwriting',
       () async {

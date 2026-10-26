@@ -4,12 +4,103 @@ import 'package:lan_bridge/core/desktop_settings.dart';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:lan_bridge/core/bridge_controller.dart';
 import 'package:lan_bridge/core/secure_transport.dart';
 import 'package:lan_bridge/core/screen_layout.dart';
 import 'package:lan_input/lan_input.dart';
 
 void main() {
+  test(
+      'inactive target hides cursor and restores it on enter, leave and disconnect',
+      () async {
+    final pair = await _Controllers.open();
+    addTearDown(pair.close);
+    expect(pair.targetInput.cursorVisible, isFalse);
+    pair.sourceInput.move(1919, 500);
+    await _until(() => pair.target.remoteActive);
+    expect(pair.targetInput.cursorVisible, isTrue);
+    pair.sourceInput.move(1000, 500, dx: -100);
+    await _until(() => !pair.target.remoteActive);
+    expect(pair.targetInput.cursorVisible, isFalse);
+    await pair.target.disconnect();
+    expect(pair.targetInput.cursorVisible, isTrue);
+    await _until(() => !pair.source.connected);
+    expect(pair.sourceInput.remote, isFalse);
+  });
+
+  test(
+      'slow native injection coalesces network motion while retaining key barriers',
+      () async {
+    final input = _FakeInput(1920, 1080);
+    final target =
+        BridgeController(input: input, enableSharing: false, port: 0);
+    await target.setRole(BridgeRole.target);
+    await target.listen();
+    final peer = await connectSecurePeer(
+        host: '127.0.0.1', port: target.port, pairingKey: target.pairingKey);
+    final subscription = peer.messages.listen((_) {});
+    final gate = Completer<void>();
+    addTearDown(() async {
+      if (!gate.isCompleted) gate.complete();
+      await subscription.cancel();
+      await peer.close();
+      await target.disconnect();
+      target.dispose();
+      await input.close();
+    });
+    await peer.send({
+      'type': 'hello',
+      'version': 7,
+      'role': 'source',
+      'side': 'right',
+      'offset': 0.0,
+      'screen': {'x': 0, 'y': 0, 'width': 1920, 'height': 1080}
+    });
+    await _until(() => target.connected);
+    await peer.send({'type': 'enter', 'x': 500.0, 'y': 500.0});
+    await _until(() => target.remoteActive);
+    input.injectGate = gate;
+    input.injectStarted = Completer<void>();
+    final initialCount = input.injected.length;
+    Future<void> move(int x) => peer.send({
+          'type': 'input',
+          'event': {'type': 'move', 'x': x.toDouble(), 'y': 500.0}
+        });
+    await move(500);
+    await input.injectStarted!.future;
+    for (var x = 501; x <= 600; x++) {
+      await move(x);
+    }
+    await peer.send({
+      'type': 'input',
+      'event': {'type': 'key', 'usage': 4, 'down': true}
+    });
+    for (var x = 601; x <= 650; x++) {
+      await move(x);
+    }
+    await peer.send({
+      'type': 'input',
+      'event': {'type': 'key', 'usage': 4, 'down': false}
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    gate.complete();
+    await _until(() => input.injected
+        .any((event) => event['type'] == 'key' && event['down'] == false));
+    final events = input.injected.skip(initialCount).toList();
+    final moves = events.where((event) => event['type'] == 'move').toList();
+    expect(moves.length, lessThanOrEqualTo(4));
+    expect(moves.last['x'], 650.0);
+    expect(events.map((event) => event['type']),
+        ['move', 'move', 'key', 'move', 'key']);
+    expect(events[1]['x'], 600.0);
+    expect(events[2]['down'], isTrue);
+    expect(events.last['down'], isFalse);
+    expect(target.connected, isTrue);
+    debugPrint(
+        'MOTION_BACKLOG: received_samples=151 injected_moves=${moves.length} keys_ordered=true');
+  });
+
   final resolutionPairs = [
     (
       const ScreenRect(-3840, -300, 3840, 2160),
@@ -344,7 +435,7 @@ void main() {
     });
     await peer.send({
       'type': 'hello',
-      'version': 6,
+      'version': 7,
       'role': 'source',
       'side': 'right',
       'offset': 0.0,
@@ -378,7 +469,7 @@ void main() {
     });
     await peer.send({
       'type': 'hello',
-      'version': 6,
+      'version': 7,
       'role': 'source',
       'side': 'right',
       'offset': 0.0,
@@ -463,6 +554,12 @@ class _Controllers {
 }
 
 class _FakeInput extends LanInput {
+  bool cursorVisible = true;
+  @override
+  Future<void> setCursorVisible(bool visible) async {
+    cursorVisible = visible;
+  }
+
   _FakeInput(this.width, this.height, {this.x = 0, this.y = 0});
   final double width, height, x, y;
   final _events = StreamController<Map<String, dynamic>>.broadcast();
@@ -470,7 +567,7 @@ class _FakeInput extends LanInput {
   final warps = <List<double>>[];
   bool remote = false, inputBusy = false;
   int releases = 0, enableAttempts = 0, disableCalls = 0;
-  Completer<void>? enableGate;
+  Completer<void>? enableGate, injectGate, injectStarted;
   void emit(Map<String, dynamic> event) => _events.add(event);
   void move(double x, double y, {double dx = 1, double dy = 0}) =>
       emit({'type': 'move', 'x': x, 'y': y, 'dx': dx, 'dy': dy});
@@ -505,6 +602,12 @@ class _FakeInput extends LanInput {
 
   @override
   Future<void> inject(Map<String, dynamic> event) async {
+    if (event['type'] == 'move' && injectGate != null) {
+      if (injectStarted != null && !injectStarted!.isCompleted) {
+        injectStarted!.complete();
+      }
+      await injectGate!.future;
+    }
     injected.add(event);
   }
 

@@ -12,10 +12,11 @@ const maxTransferBytes = 100 * 1024 * 1024 * 1024;
 typedef SendFrame = Future<void> Function(Map<String, dynamic> message);
 
 class TransferOffer {
-  TransferOffer(this.id, this.name, this.count, this.bytes, this.drag, this.y);
+  TransferOffer(this.id, this.name, this.count, this.bytes, this.drag, this.y,
+      {this.clipboard = false});
   final String id, name;
   final int count, bytes;
-  final bool drag;
+  final bool drag, clipboard;
   final double y;
 }
 
@@ -32,10 +33,14 @@ class FileTransfer extends ChangeNotifier {
   FileTransfer(
       {required this.send,
       required this.receiveDirectory,
-      this.onDragReceived});
+      this.onDragReceived,
+      this.onClipboardOffered,
+      this.onClipboardReceived});
   final SendFrame send;
   final Future<Directory> Function() receiveDirectory;
   final Future<void> Function(List<String> paths, double y)? onDragReceived;
+  final Future<bool> Function()? onClipboardOffered;
+  final Future<void> Function(List<String> paths)? onClipboardReceived;
   TransferOffer? offer;
   String status = '将文件或文件夹拖入，发送到另一台电脑';
   String? lastDirectory;
@@ -66,7 +71,7 @@ class FileTransfer extends ChangeNotifier {
       send({'type': 'share', 'op': op, 'id': id, ...fields});
 
   Future<void> sendPaths(List<String> paths,
-      {bool drag = false, double y = .5}) async {
+      {bool drag = false, bool clipboard = false, double y = .5}) async {
     if (_closed || sending) throw StateError('已有发送任务');
     sending = true;
     sentBytes = 0;
@@ -113,7 +118,11 @@ class FileTransfer extends ChangeNotifier {
         await scan(p.normalize(path), p.basename(p.normalize(path)));
       }
       if (entries.isEmpty) throw StateError('没有可发送的文件');
-      status = drag ? '跨屏拖放：正在传输，请保持按住鼠标' : '等待对方接收';
+      status = drag
+          ? '跨屏拖放：正在传输，请保持按住鼠标'
+          : clipboard
+              ? '正在同步剪贴板原始文件'
+              : '等待对方接收';
       _notify();
       await _exchange(
           'offer',
@@ -125,6 +134,7 @@ class FileTransfer extends ChangeNotifier {
             'count': entries.length,
             'bytes': sendTotal,
             'drag': drag,
+            'clipboard': clipboard,
             'y': y
           },
           timeout: const Duration(minutes: 2));
@@ -227,14 +237,24 @@ class FileTransfer extends ChangeNotifier {
           !y.isFinite ||
           y < 0 ||
           y > 1 ||
-          m['drag'] is! bool) {
+          m['drag'] is! bool ||
+          (m['clipboard'] != null && m['clipboard'] is! bool) ||
+          (m['clipboard'] == true && m['drag'] == true)) {
         throw const FormatException('无效文件清单');
       }
+      final clipboard = m['clipboard'] == true;
+      if (clipboard &&
+          (onClipboardReceived == null ||
+              !await (onClipboardOffered?.call() ?? Future.value(false)))) {
+        await _emit('reject', id);
+        return;
+      }
       offer = TransferOffer(
-          id, name, count, bytes, m['drag'] == true, y.toDouble());
+          id, name, count, bytes, m['drag'] == true, y.toDouble(),
+          clipboard: clipboard);
       status = '对方希望发送：$name';
       _notify();
-      if (offer!.drag) await accept();
+      if (offer!.drag || offer!.clipboard) await accept();
       return;
     }
     if (id != offer?.id) return; // Late packets from cancelled transfers.
@@ -345,6 +365,7 @@ class FileTransfer extends ChangeNotifier {
           lastDirectory = destination;
           status = '接收完成：$destination';
           _notify();
+          if (transfer.clipboard) await onClipboardReceived?.call(paths);
           await _emit('ack', id, {'seq': m['seq']});
           if (transfer.drag) await onDragReceived?.call(paths, transfer.y);
           return;

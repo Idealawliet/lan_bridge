@@ -52,6 +52,8 @@ class LanInput {
   Future<void> stopCapture() => _methods.invokeMethod('stopCapture');
   Future<void> setRemoteCapture(bool enabled) =>
       _methods.invokeMethod('setRemoteCapture', {'enabled': enabled});
+  Future<void> setCursorVisible(bool visible) =>
+      _methods.invokeMethod('setCursorVisible', {'visible': visible});
   Future<void> heartbeat() => _methods.invokeMethod('heartbeat');
   Future<void> inject(Map<String, dynamic> event) =>
       _methods.invokeMethod('inject', {'event': event});

@@ -4,6 +4,12 @@ import 'package:lan_input/lan_input.dart';
 import 'package:lan_bridge/core/routed_input.dart';
 
 class Native extends LanInput {
+  bool cursorVisible = true;
+  @override
+  Future<void> setCursorVisible(bool visible) async {
+    cursorVisible = visible;
+  }
+
   final bus = StreamController<Map<String, dynamic>>.broadcast(sync: true);
   @override
   Stream<Map<String, dynamic>> get events => bus.stream;

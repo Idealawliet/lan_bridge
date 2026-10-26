@@ -12,6 +12,12 @@ class FakeDiscovery extends LanDiscovery {
 }
 
 class FakeNative extends LanInput {
+  bool cursorVisible = true;
+  @override
+  Future<void> setCursorVisible(bool visible) async {
+    cursorVisible = visible;
+  }
+
   final bus = StreamController<Map<String, dynamic>>.broadcast();
   final injected = <Map<String, dynamic>>[];
   int starts = 0, stops = 0, releases = 0;

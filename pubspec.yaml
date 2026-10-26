@@ -1,7 +1,7 @@
 name: lan_bridge
 description: Share a keyboard and mouse between Windows and macOS over an encrypted LAN connection.
 publish_to: none
-version: 0.8.0+12
+version: 0.8.1+13
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:

@@ -141,11 +141,11 @@ class BridgeController extends ChangeNotifier {
   Completer<void>? _leaveAck;
   int _leaveSequence = 0;
   int _epoch = 0;
-  int _pendingWire = 0;
   bool _disposed = false, _tickRunning = false;
   Future<void>? _disconnectTask;
-  Future<void> _wireQueue = Future.value(), _clipboardQueue = Future.value();
-  int _pendingClipboard = 0;
+  Future<void> _clipboardQueue = Future.value(), _fileQueue = Future.value();
+  InputEventQueue<int>? _incomingQueue;
+  int _pendingClipboard = 0, _pendingFiles = 0;
   int _inputRevision = 0;
   bool _inputEnabled = true;
   late final _nativeQueue = InputEventQueue<({int epoch, int revision})>(
@@ -159,7 +159,8 @@ class BridgeController extends ChangeNotifier {
       },
       onError: (error, stack, context) =>
           _fail('输入服务已停止：$error', context.epoch),
-      limit: 1024);
+      limit: 1024,
+      motionInterval: const Duration(microseconds: 4000));
   Future<void> suspendInput() async {
     _inputEnabled = false;
     _inputRevision++;
@@ -377,13 +378,14 @@ class BridgeController extends ChangeNotifier {
       _listener = null;
       if (epoch != _epoch) return;
       _lastMessage = DateTime.now();
-      _wireQueue = Future.value();
+      _fileQueue = Future.value();
       _clipboardQueue = Future.value();
       _pendingClipboard = 0;
+      _pendingFiles = 0;
       _nativeQueue.clear();
       _inputRevision++;
-      _pendingWire = 0;
       if (enableSharing) {
+        int? clipboardRevisionAtOffer;
         Future<void> send(Map<String, dynamic> message) async {
           if (epoch != _epoch) throw StateError('连接已断开');
           await peer.send(message);
@@ -391,6 +393,24 @@ class BridgeController extends ChangeNotifier {
 
         files = FileTransfer(
             send: send,
+            onClipboardOffered: () async {
+              final sync = clipboard;
+              if (epoch != _epoch || sync == null || !sync.enabled) {
+                return false;
+              }
+              try {
+                clipboardRevisionAtOffer = await sync.access.revision();
+                return epoch == _epoch && sync.enabled;
+              } catch (_) {
+                return false;
+              }
+            },
+            onClipboardReceived: (paths) async {
+              if (epoch != _epoch) return;
+              final applied = await clipboard?.applyFiles(paths,
+                  expectedRevision: clipboardRevisionAtOffer);
+              if (applied != true) throw StateError('文件已收到，但剪贴板已变化或暂停，请重新复制');
+            },
             receiveDirectory: () async {
               final directory = await getDownloadsDirectory();
               if (directory == null) throw StateError('无法找到下载目录');
@@ -408,40 +428,42 @@ class BridgeController extends ChangeNotifier {
           ..addListener(_notify);
         clipboard = ClipboardSync(
             send: send,
+            sendFiles: (paths) async {
+              if (epoch != _epoch) return;
+              await files!.sendPaths(paths, clipboard: true);
+            },
             access: _clipboardAccess ??
                 SystemClipboard(
                     _input.clipboardRevision, _input.clipboardHasFiles))
           ..addListener(_notify);
       }
-      _incoming = peer.messages.listen((message) {
-        if (epoch != _epoch) return;
-        _lastMessage = DateTime.now();
-        // OS clipboard reads/writes can block independently of keyboard input.
-        // Preserve clipboard ordering without delaying key releases or leave.
-        if (hello.isCompleted && message['type'] == 'clipboard') {
-          if (++_pendingClipboard > 1024) {
-            unawaited(_fail('剪贴板消息积压', epoch));
-            return;
+      final wireQueue = InputEventQueue<int>(
+        limit: 1024,
+        mergeMoves: (previous, next) {
+          bool validMove(Map<String, dynamic> message) {
+            final event = message['event'];
+            if (message['type'] != 'input' ||
+                event is! Map ||
+                event['type'] != 'move') {
+              return false;
+            }
+            final x = event['x'], y = event['y'];
+            return x is num &&
+                y is num &&
+                x.isFinite &&
+                y.isFinite &&
+                x.abs() <= 100000 &&
+                y.abs() <= 100000;
           }
-          _clipboardQueue = _clipboardQueue
-              .then<void>((_) async {
-                if (epoch == _epoch) await _receive(message, epoch);
-              })
-              .catchError((Object e) => _fail('剪贴板协议错误：$e', epoch))
-              .whenComplete(() {
-                if (epoch == _epoch) _pendingClipboard--;
-              });
-          return;
-        }
-        if (++_pendingWire > 1024) {
-          unawaited(_fail('输入积压，已安全断开连接', epoch));
-          return;
-        }
-        _wireQueue = _wireQueue.then((_) async {
+
+          return validMove(previous) && validMove(next) ? next : null;
+        },
+        consume: (message, messageEpoch) async {
+          if (messageEpoch != _epoch) return;
           if (epoch != _epoch) return;
           if (!hello.isCompleted) {
             if (message['type'] != 'hello' ||
-                message['version'] != 6 ||
+                message['version'] != 7 ||
                 message['role'] !=
                     (role == BridgeRole.source ? 'target' : 'source') ||
                 message['screen'] is! Map) {
@@ -465,12 +487,49 @@ class BridgeController extends ChangeNotifier {
           } else {
             await _receive(message, epoch);
           }
-        }).catchError((Object e) async {
+        },
+        onError: (Object e, StackTrace stack, int messageEpoch) async {
           if (!hello.isCompleted) hello.completeError(e);
-          await _fail('会话已停止：$e', epoch);
-        }).whenComplete(() {
-          if (epoch == _epoch) _pendingWire--;
-        });
+          await _fail('会话已停止：$e', messageEpoch);
+        },
+      );
+      _incomingQueue = wireQueue;
+      _incoming = peer.messages.listen((message) {
+        if (epoch != _epoch) return;
+        _lastMessage = DateTime.now();
+        // OS clipboard reads/writes can block independently of keyboard input.
+        // Preserve clipboard ordering without delaying key releases or leave.
+        if (hello.isCompleted && message['type'] == 'clipboard') {
+          if (++_pendingClipboard > 1024) {
+            unawaited(_fail('剪贴板消息积压', epoch));
+            return;
+          }
+          _clipboardQueue = _clipboardQueue
+              .then<void>((_) async {
+                if (epoch == _epoch) await _receive(message, epoch);
+              })
+              .catchError((Object e) => _fail('剪贴板协议错误：$e', epoch))
+              .whenComplete(() {
+                if (epoch == _epoch) _pendingClipboard--;
+              });
+          return;
+        }
+        if (hello.isCompleted && message['type'] == 'share') {
+          if (++_pendingFiles > 1024) {
+            unawaited(_fail('文件消息积压', epoch));
+            return;
+          }
+          _fileQueue = _fileQueue
+              .then<void>((_) async {
+                if (epoch == _epoch) await _receive(message, epoch);
+              })
+              .catchError((Object e) => _fail('文件传输错误：$e', epoch))
+              .whenComplete(() {
+                if (epoch == _epoch) _pendingFiles--;
+              });
+          return;
+        }
+        wireQueue.add(message, epoch);
       }, onError: (Object e) {
         if (!hello.isCompleted) hello.completeError(e);
         unawaited(_fail(
@@ -518,7 +577,7 @@ class BridgeController extends ChangeNotifier {
           const Duration(milliseconds: 500), (_) => _tick(epoch));
       await peer.send({
         'type': 'hello',
-        'version': 6,
+        'version': 7,
         'role': role.name,
         'side': side.name,
         'offset': screenOffset,
@@ -527,6 +586,7 @@ class BridgeController extends ChangeNotifier {
       await handshake;
       if (epoch != _epoch) return;
       phase = ConnectionPhase.connected;
+      if (role == BridgeRole.target) await _input.setCursorVisible(false);
       if (enableSharing) {
         await _configureEdge();
         unawaited(clipboard!.start());
@@ -536,6 +596,13 @@ class BridgeController extends ChangeNotifier {
       _notify();
     } catch (e) {
       await _fail('建立会话失败：$e', epoch);
+    }
+  }
+
+  Future<void> _setRemoteActive(bool active) async {
+    remoteActive = active;
+    if (role == BridgeRole.target && supported) {
+      await _input.setCursorVisible(active);
     }
   }
 
@@ -608,7 +675,7 @@ class BridgeController extends ChangeNotifier {
       final entry = arrangement.point(remote, fraction - screenOffset);
       _remoteX = entry.x;
       _remoteY = entry.y;
-      remoteActive = true;
+      await _setRemoteActive(true);
       await _peer?.send({'type': 'enter', 'x': _remoteX, 'y': _remoteY});
       _notify();
       return;
@@ -644,7 +711,7 @@ class BridgeController extends ChangeNotifier {
   Future<void> _returnLocal(int epoch) async {
     await _input.setRemoteCapture(false);
     if (epoch != _epoch) return;
-    remoteActive = false;
+    await _setRemoteActive(false);
     _crossAfter = DateTime.now().add(const Duration(milliseconds: 350));
     final point = arrangement.point(_local!,
         arrangement.tangent(_remote!, _remoteX, _remoteY) + screenOffset,
@@ -744,7 +811,7 @@ class BridgeController extends ChangeNotifier {
           'y': _local!.clampY(_number(message, 'y'))
         });
         if (epoch != _epoch) return;
-        remoteActive = true;
+        await _setRemoteActive(true);
         _notify();
       case 'input':
         if (!remoteActive || message['event'] is! Map) {
@@ -761,7 +828,7 @@ class BridgeController extends ChangeNotifier {
         if (message['id'] is! int) throw const FormatException('无效返回确认编号');
         await _input.releaseAll();
         if (epoch != _epoch) return;
-        remoteActive = false;
+        await _setRemoteActive(false);
         await _peer?.send({'type': 'left', 'id': message['id']});
         _notify();
       default:
@@ -871,7 +938,7 @@ class BridgeController extends ChangeNotifier {
     if (role == BridgeRole.source) {
       _heldButtons.add(1);
       await _input.prepareFileDrag();
-      remoteActive = true;
+      await _setRemoteActive(true);
       final entry = arrangement.point(_remote!, fraction - screenOffset);
       _remoteX = entry.x;
       _remoteY = entry.y;
@@ -879,7 +946,7 @@ class BridgeController extends ChangeNotifier {
       await _peer?.send({'type': 'drag_reverse'});
       await _input.cancelLocalDrag();
       await _input.releaseAll();
-      remoteActive = false;
+      await _setRemoteActive(false);
     }
     try {
       if (epoch != _epoch) return;
@@ -897,12 +964,12 @@ class BridgeController extends ChangeNotifier {
     await _input.configureFileEdge(false, false);
     if (role == BridgeRole.source) {
       await _input.setRemoteCapture(false);
-      remoteActive = false;
+      await _setRemoteActive(false);
       _heldButtons.clear();
       final point = arrangement.point(_local!, fraction, returning: true);
       await _input.warp(point.x, point.y);
     } else {
-      remoteActive = true;
+      await _setRemoteActive(true);
       final point = arrangement.point(_local!, fraction);
       await _input.warp(point.x, point.y);
     }
@@ -919,7 +986,7 @@ class BridgeController extends ChangeNotifier {
       await _input.cancelFileDrag();
       await _input.setRemoteCapture(false);
       await _input.releaseAll();
-      remoteActive = false;
+      await _setRemoteActive(false);
       _heldButtons.clear();
       await files?.cancel();
       if (connected) {
@@ -979,11 +1046,15 @@ class BridgeController extends ChangeNotifier {
     final accept = _accept;
     _accept = null;
     remoteActive = false;
+    _incomingQueue?.clear();
     phase = ConnectionPhase.connecting;
     pairingKey = '';
     peerAddress = null;
     // Restore native input before waiting on any network teardown.
     if (supported) {
+      try {
+        await _input.setCursorVisible(true);
+      } catch (_) {}
       try {
         await _input.setRemoteCapture(false);
       } catch (_) {}

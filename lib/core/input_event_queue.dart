@@ -9,13 +9,23 @@ class _InputItem<T> {
 
 /// Preserves keys/buttons/scroll as ordering barriers. Only adjacent mouse
 /// samples from the same session are merged, retaining total relative motion
-/// and the newest absolute position. Starts immediately without a frame timer.
+/// and the newest absolute position. Optional source pacing bounds packet rate;
+/// the default consumer starts immediately.
 class InputEventQueue<T> {
   InputEventQueue(
-      {required this.consume, required this.onError, this.limit = 512});
+      {required this.consume,
+      required this.onError,
+      this.limit = 512,
+      this.mergeMoves,
+      this.motionInterval = Duration.zero});
   final Future<void> Function(Map<String, dynamic>, T) consume;
   final FutureOr<void> Function(Object, StackTrace, T) onError;
   final int limit;
+  final Map<String, dynamic>? Function(
+      Map<String, dynamic>, Map<String, dynamic>)? mergeMoves;
+  final Duration motionInterval;
+  final _clock = Stopwatch()..start();
+  int _lastMove = -1000000;
   final _items = ListQueue<_InputItem<T>>();
   Completer<void>? _idle;
   int merged = 0, peakDepth = 0;
@@ -24,6 +34,17 @@ class InputEventQueue<T> {
 
   void add(Map<String, dynamic> event, T context) {
     if (_items.isNotEmpty &&
+        _items.last.context == context &&
+        mergeMoves != null) {
+      final mergedEvent = mergeMoves!(_items.last.event, event);
+      if (mergedEvent != null) {
+        _items.last.event = mergedEvent;
+        merged++;
+        return;
+      }
+    }
+    if (mergeMoves == null &&
+        _items.isNotEmpty &&
         _items.last.context == context &&
         _items.last.event['type'] == 'move' &&
         _items.last.event['captured'] == event['captured'] &&
@@ -63,8 +84,20 @@ class InputEventQueue<T> {
     final completion = _idle!;
     try {
       while (_items.isNotEmpty) {
+        if (_items.first.event['type'] == 'move' &&
+            motionInterval > Duration.zero) {
+          final remaining = motionInterval.inMicroseconds -
+              (_clock.elapsedMicroseconds - _lastMove);
+          if (remaining > 0) {
+            await Future<void>.delayed(Duration(microseconds: remaining));
+          }
+          if (_items.isEmpty) continue;
+        }
         final item = _items.removeFirst();
         try {
+          if (item.event['type'] == 'move') {
+            _lastMove = _clock.elapsedMicroseconds;
+          }
           if (item.event['type'] == '_overflow') throw StateError('输入事件积压');
           await consume(item.event, item.context);
         } catch (error, stack) {

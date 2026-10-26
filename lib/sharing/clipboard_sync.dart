@@ -9,6 +9,10 @@ import 'file_transfer.dart';
 
 class ClipboardContent {
   ClipboardContent(this.format, this.bytes);
+  factory ClipboardContent.files(List<String> paths) => ClipboardContent(
+      'files', Uint8List.fromList(utf8.encode(jsonEncode(paths))));
+  List<String> get filePaths =>
+      (jsonDecode(utf8.decode(bytes)) as List).cast<String>();
   final String format;
   final Uint8List bytes;
 }
@@ -20,30 +24,53 @@ abstract class ClipboardAccess {
 }
 
 class SystemClipboard implements ClipboardAccess {
-  SystemClipboard(this.getRevision, this.hasFiles);
+  SystemClipboard(this.getRevision, this.hasFiles,
+      {Future<List<String>> Function()? readFiles,
+      Future<Uint8List?> Function()? readImage,
+      Future<String?> Function()? readText,
+      Future<bool> Function(List<String>)? writeFiles})
+      : _readFiles = readFiles ?? Pasteboard.files,
+        _readImage = readImage ?? (() => Pasteboard.image),
+        _readText = readText ??
+            (() async => (await Clipboard.getData(Clipboard.kTextPlain))?.text),
+        _writeFiles = writeFiles ?? Pasteboard.writeFiles;
   final Future<int> Function() getRevision;
   final Future<bool> Function() hasFiles;
+  final Future<List<String>> Function() _readFiles;
+  final Future<Uint8List?> Function() _readImage;
+  final Future<String?> Function() _readText;
+  final Future<bool> Function(List<String>) _writeFiles;
   @override
   Future<int> revision() => getRevision();
   @override
   Future<ClipboardContent?> read() async {
-    // Files are handled by explicit drag/drop, not automatically copied merely
-    // because their local paths are on the clipboard.
-    if (await hasFiles()) return null;
-    final image = await Pasteboard.image;
+    // File URLs/CF_HDROP take precedence over preview images and display names.
+    // Only the original bytes go through FileTransfer, never an image conversion.
+    if (await hasFiles()) {
+      final paths = await _readFiles();
+      return paths.isEmpty ? null : ClipboardContent.files(paths);
+    }
+    final image = await _readImage();
+    if (await hasFiles()) {
+      return null; // Clipboard changed during the async read.
+    }
     if (image != null && image.isNotEmpty) {
       return ClipboardContent('png', image);
     }
-    final text = await Clipboard.getData(Clipboard.kTextPlain);
-    return text?.text == null
+    final text = await _readText();
+    if (await hasFiles()) return null;
+    return text == null
         ? null
-        : ClipboardContent(
-            'text', Uint8List.fromList(utf8.encode(text!.text!)));
+        : ClipboardContent('text', Uint8List.fromList(utf8.encode(text)));
   }
 
   @override
   Future<void> write(ClipboardContent content) async {
-    if (content.format == 'png') {
+    if (content.format == 'files') {
+      if (!await _writeFiles(content.filePaths)) {
+        throw StateError('无法将接收文件写入系统剪贴板');
+      }
+    } else if (content.format == 'png') {
       await Pasteboard.writeImage(content.bytes);
     } else {
       await Clipboard.setData(ClipboardData(text: utf8.decode(content.bytes)));
@@ -52,12 +79,13 @@ class SystemClipboard implements ClipboardAccess {
 }
 
 class ClipboardSync extends ChangeNotifier {
-  ClipboardSync({required this.send, required this.access});
+  ClipboardSync({required this.send, required this.access, this.sendFiles});
+  final Future<void> Function(List<String>)? sendFiles;
   final SendFrame send;
   final ClipboardAccess access;
   static const maxBytes = 8 * 1024 * 1024;
   bool enabled = true, _closed = false, _polling = false, _applying = false;
-  String status = '同步纯文本与图片（最大 8 MiB）';
+  String status = '同步文本、图片与原始文件';
   Timer? _timer;
   int? _revision;
   String? _fingerprint, _incomingId;
@@ -126,10 +154,28 @@ class ClipboardSync extends ChangeNotifier {
           generation != _generation) {
         return;
       }
+      if (await access.revision() != revision ||
+          _closed ||
+          !enabled ||
+          _applying ||
+          generation != _generation) {
+        return;
+      }
       final fingerprint = '${content.format}:${sha256.convert(content.bytes)}';
       if (fingerprint == _fingerprint) return;
       if (content.bytes.length > maxBytes) {
         status = '剪贴板超过 8 MiB，未同步';
+        _notify();
+        return;
+      }
+      if (content.format == 'files') {
+        if (sendFiles == null) return;
+        status = '正在同步原始文件，请等待传输完成后粘贴';
+        _notify();
+        await sendFiles!(content.filePaths);
+        if (generation != _generation || _closed || !enabled) return;
+        _fingerprint = fingerprint;
+        status = '原始文件已同步，可在另一台电脑粘贴';
         _notify();
         return;
       }
@@ -170,6 +216,36 @@ class ClipboardSync extends ChangeNotifier {
       _polling = false;
       _outgoingId = null;
       _ack = null;
+    }
+  }
+
+  Future<bool> applyFiles(List<String> paths, {int? expectedRevision}) async {
+    if (_closed || !enabled || _applying) return false;
+    final generation = _generation;
+    if (expectedRevision != null &&
+        await access.revision() != expectedRevision) {
+      status = '文件已收到；本机剪贴板已变化，保留新复制的内容';
+      _notify();
+      return false;
+    }
+    if (_closed || !enabled || generation != _generation || _applying) {
+      return false;
+    }
+    _applying = true;
+    final completion = Completer<void>();
+    _writeDone = completion;
+    try {
+      final content = ClipboardContent.files(paths);
+      await access.write(content);
+      _revision = await access.revision();
+      _fingerprint = 'files:${sha256.convert(content.bytes)}';
+      status = '原始文件已接收，可直接粘贴（保留文件名和格式）';
+      _notify();
+      return true;
+    } finally {
+      _applying = false;
+      completion.complete();
+      _writeDone = null;
     }
   }
 
@@ -250,6 +326,12 @@ class ClipboardSync extends ChangeNotifier {
         _incomingId = null;
         if (sha256.convert(bytes).toString() != m['hash']) {
           throw const FormatException('剪贴板校验失败');
+        }
+        final generation = _generation;
+        if (_applying) await settled;
+        if (_closed || !enabled || generation != _generation) {
+          await send({'type': 'clipboard', 'op': 'reject', 'id': id});
+          return;
         }
         _applying = true;
         final writeDone = Completer<void>();

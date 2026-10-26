@@ -24,6 +24,7 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     private var watchdogTripped = false
     private var remote = false
     private var cursorHidden = false
+    private var cursorVisible = true
     private var injectedKeys = Set<Int>()
     private var injectedButtons = Set<Int>()
     private var capsLock = CGEventSource.flagsState(.combinedSessionState).contains(.maskAlphaShift)
@@ -33,7 +34,11 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     private var clickCount: Int64 = 1
     private var scrollCarryX = 0.0
     private var scrollCarryY = 0.0
-    private let source = CGEventSource(stateID: .privateState)
+    private let source: CGEventSource? = {
+        let source = CGEventSource(stateID: .privateState)
+        source?.localEventsSuppressionInterval = 0
+        return source
+    }()
     private static let marker: Int64 = 0x4C414E494E505554
 
     // USB HID keyboard page 0x07 -> macOS hardware virtual keycodes. Physical
@@ -109,6 +114,9 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         let args = call.arguments as? [String: Any] ?? [:]
         switch call.method {
+        case "setCursorVisible":
+            guard let visible = args["visible"] as? Bool else { result(invalid("visible required")); return }
+            lock.lock(); cursorVisible = visible; updateCursorLocked(); lock.unlock(); result(nil)
         case "clipboardRevision": result(NSPasteboard.general.changeCount)
         case "clipboardHasFiles": result(NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]))
         case "configureFileEdge":
@@ -259,7 +267,9 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
 
     private func stopCapture() {
         lock.lock()
+        cursorVisible = true
         setRemoteLocked(false)
+        updateCursorLocked()
         releaseAllLocked()
         let port = tap
         let loop = tapRunLoop
@@ -280,9 +290,14 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         // Disassociation preserves unbounded physical deltas while the source
         // cursor is held in place. Always balance this on every exit path.
         CGAssociateMouseAndMouseCursorPosition(enabled ? 0 : 1)
-        if enabled && !cursorHidden {
+        updateCursorLocked()
+    }
+
+    private func updateCursorLocked() {
+        let hide = remote || !cursorVisible
+        if hide && !cursorHidden {
             CGDisplayHideCursor(CGMainDisplayID()); cursorHidden = true
-        } else if !enabled && cursorHidden {
+        } else if !hide && cursorHidden {
             CGDisplayShowCursor(CGMainDisplayID()); cursorHidden = false
         }
     }
@@ -291,10 +306,12 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         lock.lock()
         defer { lock.unlock() }
         guard !watchdogTripped,
-              remote || !injectedKeys.isEmpty || !injectedButtons.isEmpty,
+              remote || !cursorVisible || !injectedKeys.isEmpty || !injectedButtons.isEmpty,
               ProcessInfo.processInfo.systemUptime - lastHeartbeat > 2.5 else { return }
         watchdogTripped = true
+        cursorVisible = true
         setRemoteLocked(false)
+        updateCursorLocked()
         if injectedButtons.contains(1) { FileDragBridge.cancelLocal() }
         releaseAllLocked()
         emit(["type": "captureLost", "message": "Input heartbeat expired; local control restored."])
@@ -304,7 +321,9 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         lock.lock()
         defer { lock.unlock() }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            cursorVisible = true
             setRemoteLocked(false)
+            updateCursorLocked()
             releaseAllLocked()
             if let tap = tap { CGEvent.tapEnable(tap: tap, enable: true) }
             emit(["type": "captureLost", "message": "macOS disabled the input tap; local control restored."])
@@ -315,7 +334,9 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         }
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         if type == .keyDown && keyCode == 53 && event.flags.contains(.maskControl) && event.flags.contains(.maskAlternate) {
+            cursorVisible = true
             setRemoteLocked(false)
+            updateCursorLocked()
             releaseAllLocked()
             emit(["type": "emergency"])
             return nil
@@ -475,7 +496,9 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         } else if pendingEvents.count < 2048 {
             pendingEvents.append(event)
         } else {
+            cursorVisible = true
             setRemoteLocked(false)
+            updateCursorLocked()
             releaseAllLocked()
             pendingEvents = [["type": "captureLost", "message": "Input queue overflow; local control restored."]]
         }

@@ -236,6 +236,7 @@ class NativeBridge {
   }
 
   void StopCapture() {
+    cursor_visible_ = true;
     RestoreCursor();
     remote_ = false;
     if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
@@ -253,6 +254,25 @@ class NativeBridge {
     while (cursor_hide_calls_ > 0) {
       ShowCursor(TRUE);
       --cursor_hide_calls_;
+    }
+  }
+
+  void SetCursorVisible(bool visible) {
+    cursor_visible_ = visible;
+    UpdateCursorVisibility();
+  }
+
+  void UpdateCursorVisibility() {
+    if (remote_ || !cursor_visible_) {
+      if (cursor_hide_calls_ == 0) {
+        int visibility;
+        do {
+          visibility = ShowCursor(FALSE);
+          ++cursor_hide_calls_;
+        } while (visibility >= 0);
+      }
+    } else {
+      RestoreCursor();
     }
   }
 
@@ -281,15 +301,10 @@ class NativeBridge {
         remote_ = false;
         return "Windows rejected cursor positioning";
       }
-      int visibility;
-      do {
-        visibility = ShowCursor(FALSE);
-        ++cursor_hide_calls_;
-      } while (visibility >= 0);
     } else {
-      RestoreCursor();
       GetCursorPos(&last_mouse_);
     }
+    UpdateCursorVisibility();
     return {};
   }
 
@@ -464,6 +479,7 @@ class NativeBridge {
       } else if (event_queue_.size() < 2048) {
         event_queue_.push_back(std::move(event));
       } else {
+        cursor_visible_ = true;
         RestoreCursor();
         remote_ = false;
         ReleaseAll();
@@ -530,6 +546,7 @@ class NativeBridge {
     const bool control = keys.count(0xe0) || keys.count(0xe4);
     const bool alt = keys.count(0xe2) || keys.count(0xe6);
     if (down && event.vkCode == VK_ESCAPE && control && alt) {
+      self->cursor_visible_ = true;
       self->RestoreCursor();
       self->remote_ = false;
       self->ReleaseAll();
@@ -616,6 +633,7 @@ class NativeBridge {
   HHOOK mouse_hook_ = nullptr;
   bool remote_ = false;
   int cursor_hide_calls_ = 0;
+  bool cursor_visible_ = true;
   ULONGLONG last_heartbeat_ = 0;
   POINT anchor_{};
   POINT last_mouse_{};
@@ -708,7 +726,13 @@ void LanInputPlugin::HandleMethodCall(
       return;
     }
     std::string error;
-    if (method == "clipboardRevision") {
+    if (method == "setCursorVisible") {
+      bool visible = true;
+      if (!arguments || !Boolean(*arguments, "visible", visible)) {
+        result->Error("invalid_arguments", "visible must be a boolean"); return;
+      }
+      bridge_->Invoke([this, visible] { bridge_->SetCursorVisible(visible); });
+    } else if (method == "clipboardRevision") {
       result->Success(Value(static_cast<int64_t>(GetClipboardSequenceNumber()))); return;
     } else if (method == "clipboardHasFiles") {
       result->Success(Value(IsClipboardFormatAvailable(CF_HDROP) != FALSE)); return;

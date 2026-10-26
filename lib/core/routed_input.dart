@@ -166,6 +166,11 @@ class RoutedInput extends LanInput {
   }
 
   @override
+  Future<void> setCursorVisible(bool visible) async {
+    if (active) await router.native.setCursorVisible(visible);
+  }
+
+  @override
   Future<void> heartbeat() async {
     await router.native.heartbeat();
   }
