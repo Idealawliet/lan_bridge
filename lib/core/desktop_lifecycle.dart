@@ -39,4 +39,6 @@ class DesktopLifecycle {
   }
 
   void dispose() => channel.setMethodCallHandler(null);
+
+  Future<void> quit() => channel.invokeMethod<void>('quit');
 }

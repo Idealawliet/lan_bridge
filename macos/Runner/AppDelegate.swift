@@ -31,6 +31,11 @@ class AppDelegate: FlutterAppDelegate {
       item.menu = menu; statusItem = item
     }
     lifecycle?.setMethodCallHandler { [weak self] call, result in
+      if call.method == "quit" {
+        result(nil)
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+        return
+      }
       guard call.method == "updateStatus",
             let args = call.arguments as? [String: Any],
             let control = args["control"] as? String,

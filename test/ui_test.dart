@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import 'package:lan_bridge/core/lan_workspace.dart';
 import 'package:lan_bridge/core/lan_discovery.dart';
 import 'package:lan_bridge/core/secure_transport.dart';
 import 'package:lan_bridge/screen_workspace.dart';
+import 'package:lan_bridge/core/github_updates.dart';
 
 class _PreviewController extends BridgeController {
   @override
@@ -65,7 +67,108 @@ class _PreviewWorkspace extends LanWorkspace {
   void refreshLayout() => notifyListeners();
 }
 
+class _PreviewUpdates extends GitHubUpdates {
+  _PreviewUpdates()
+      : super(operatingSystem: 'windows', currentVersion: '0.9.1');
+  int downloads = 0, installations = 0;
+  @override
+  Future<void> initialize() async {}
+  @override
+  Future<void> check() async {
+    const name = 'lan-bridge-windows-x64-0.10.0-setup-unsigned.exe';
+    available = GitHubUpdates.selectRelease([
+      {
+        'draft': false,
+        'prerelease': true,
+        'tag_name': 'v0.10.0',
+        'body': '更新说明示例',
+        'assets': [
+          for (final file in [name, '$name.sha256'])
+            {
+              'name': file,
+              'size': 100,
+              'browser_download_url':
+                  'https://github.com/Idealawliet/lan_bridge/releases/download/v0.10.0/$file',
+            }
+        ],
+      }
+    ], 'windows', currentVersion);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> download() async {
+    downloads++;
+    downloadedFile = File('/tmp/test-update.exe');
+    notifyListeners();
+  }
+
+  @override
+  Future<void> openInstaller() async {
+    installations++;
+  }
+}
+
 void main() {
+  testWidgets(
+      'updates show notes and require separate download and installation consent',
+      (tester) async {
+    const lifecycleChannel = MethodChannel('lan_bridge/lifecycle');
+    var quits = 0;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(lifecycleChannel, (call) async {
+      if (call.method == 'quit') quits++;
+      return null;
+    });
+    addTearDown(
+        () => messenger.setMockMethodCallHandler(lifecycleChannel, null));
+    tester.view.physicalSize = const Size(1000, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final updates = _PreviewUpdates();
+    await tester.pumpWidget(MaterialApp(
+        home: BridgeDashboard(
+            controller: _PreviewController(), updates: updates)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('检查更新'));
+    await tester.tap(find.text('检查更新'));
+    await tester.pumpAndSettle();
+    expect(find.text('更新说明示例'), findsOneWidget);
+    expect(updates.downloads, 0);
+    expect(updates.installations, 0);
+    await tester.ensureVisible(find.text('下载更新'));
+    await tester.tap(find.text('下载更新'));
+    await tester.pumpAndSettle();
+    expect(updates.downloads, 1);
+    expect(updates.installations, 0);
+    await tester.ensureVisible(find.text('安装更新…'));
+    await tester.tap(find.text('安装更新…'));
+    await tester.pumpAndSettle();
+    expect(find.text('打开安装包并退出'), findsOneWidget);
+    await tester.tap(find.text('稍后安装'));
+    await tester.pumpAndSettle();
+    expect(updates.installations, 0);
+    expect(quits, 0);
+    await tester.tap(find.text('安装更新…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('打开安装包并退出'));
+    await tester.pumpAndSettle();
+    expect(updates.installations, 1);
+    expect(quits, 1);
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
+    expect(find.text('发现新版本 v0.10.0'), findsOneWidget);
+    await tester.tap(find.text('稍后提醒'));
+    await tester.pumpAndSettle();
+    expect(find.text('发现新版本 v0.10.0'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets(
       'layout only shows real connected clients before start, after leave and after stop',
       (tester) async {

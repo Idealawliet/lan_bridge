@@ -7,6 +7,19 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('lan_bridge/lifecycle_test');
   const codec = StandardMethodCodec();
+  test('explicit update exit uses native quit instead of hiding the window',
+      () async {
+    String? method;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      method = call.method;
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await DesktopLifecycle(() async {}, channel: channel).quit();
+    expect(method, 'quit');
+  });
   Future<Object?> invoke(String method) async {
     final reply = Completer<Object?>();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

@@ -47,6 +47,11 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), "lan_bridge/lifecycle",
       &flutter::StandardMethodCodec::GetInstance());
   lifecycle_->SetMethodCallHandler([this](const auto& call, auto result) {
+    if (call.method_name() == "quit") {
+      result->Success();
+      RequestQuit();
+      return;
+    }
     if (call.method_name() != "updateStatus") { result->NotImplemented(); return; }
     const auto* args = call.arguments()
         ? std::get_if<flutter::EncodableMap>(call.arguments()) : nullptr;

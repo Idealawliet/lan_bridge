@@ -5,11 +5,14 @@ import 'package:path_provider/path_provider.dart';
 
 /// Per-user preferences. Pairing keys are deliberately never persisted.
 class DesktopSettings {
-  DesktopSettings({Future<Directory> Function()? directory})
+  DesktopSettings(
+      {Future<Directory> Function()? directory,
+      this.fileName = 'settings.json'})
       : _directory = directory ?? getApplicationSupportDirectory;
   final Future<Directory> Function() _directory;
+  final String fileName;
   Future<File> _file() async =>
-      File(p.join((await _directory()).path, 'settings.json'));
+      File(p.join((await _directory()).path, fileName));
   Future<Map<String, dynamic>> load() async {
     final file = await _file();
     if (!await file.exists()) return {};

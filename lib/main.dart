@@ -10,6 +10,7 @@ import 'core/bridge_controller.dart';
 import 'core/lan_workspace.dart';
 import 'core/desktop_lifecycle.dart';
 import 'core/lan_discovery.dart';
+import 'core/github_updates.dart';
 import 'screen_workspace.dart';
 
 const _ink = Color(0xFF202434);
@@ -84,9 +85,11 @@ class LanBridgeApp extends StatelessWidget {
 }
 
 class BridgeDashboard extends StatefulWidget {
-  const BridgeDashboard({super.key, this.controller, this.workspace});
+  const BridgeDashboard(
+      {super.key, this.controller, this.workspace, this.updates});
   final BridgeController? controller;
   final LanWorkspace? workspace;
+  final GitHubUpdates? updates;
 
   @override
   State<BridgeDashboard> createState() => _BridgeDashboardState();
@@ -96,6 +99,9 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
   late final _localBridge =
       widget.workspace?.local ?? widget.controller ?? BridgeController();
   late final _workspace = widget.workspace ?? LanWorkspace(_localBridge);
+  late final _updates = widget.updates ?? GitHubUpdates();
+  String? _dismissedUpdate;
+  bool _installingUpdate = false;
   BridgeController get _bridge => _workspace.active?.controller ?? _localBridge;
   final _address = TextEditingController();
   late final AppLifecycleListener _lifecycle;
@@ -115,6 +121,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     super.initState();
     _localBridge.addListener(_refresh);
     _workspace.addListener(_refresh);
+    _updates.addListener(_refresh);
     _desktopLifecycle = DesktopLifecycle(_prepareQuit)..install();
     _lifecycle = AppLifecycleListener(onExitRequested: () async {
       await _prepareQuit();
@@ -122,6 +129,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     });
     _updateTray();
     unawaited(_initialize());
+    unawaited(_updates.initialize());
   }
 
   Future<void> _prepareQuit() async {
@@ -187,6 +195,8 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     _lifecycle.dispose();
     _desktopLifecycle.dispose();
     _workspace.removeListener(_refresh);
+    _updates.removeListener(_refresh);
+    _updates.dispose();
     _localBridge.removeListener(_refresh);
     unawaited(_workspace.close().whenComplete(_localBridge.dispose));
     _address.dispose();
@@ -204,6 +214,11 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _header(),
+                        if (_updates.available != null &&
+                            _dismissedUpdate != _updates.available!.tag) ...[
+                          const SizedBox(height: 16),
+                          _updateBanner(),
+                        ],
                         const SizedBox(height: 24),
                         _Panel(child: _multiComputerPanel()),
                         if (_workspace.running) ...[
@@ -264,7 +279,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AnimatedBuilder(
-        animation: _workspace,
+        animation: Listenable.merge([_workspace, _updates]),
         builder: (context, _) => AlertDialog(
           title: const Text('设置'),
           content: SizedBox(
@@ -274,6 +289,8 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                 _preferencesPanel(),
                 const SizedBox(height: 16),
                 _connectionPanel(),
+                const SizedBox(height: 16),
+                _updatesPanel(),
               ]),
             ),
           ),
@@ -690,6 +707,116 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
         },
       )
     ]));
+  }
+
+  Widget _updateBanner() => _Panel(
+        padding: const EdgeInsets.all(16),
+        child: Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Icon(Icons.system_update_alt, color: _teal),
+              Text('发现新版本 ${_updates.available!.tag}',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              TextButton(onPressed: _openSettings, child: const Text('查看更新')),
+              TextButton(
+                  onPressed: () => setState(
+                      () => _dismissedUpdate = _updates.available!.tag),
+                  child: const Text('稍后提醒')),
+            ]),
+      );
+
+  Widget _updatesPanel() {
+    final release = _updates.available;
+    final busy = _updates.checking || _updates.downloading || _installingUpdate;
+    return _Panel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const _SectionTitle(
+          number: '03', title: '软件更新', subtitle: '发现更新后由你选择下载和安装。'),
+      const SizedBox(height: 12),
+      Text('当前版本 v${_updates.currentVersion}'),
+      SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('启动时检查更新'),
+          subtitle: const Text('包含 GitHub 预览版；不会自动下载或安装。'),
+          value: _updates.autoCheck,
+          onChanged: !_updates.supported
+              ? null
+              : (value) => unawaited(_updates.setAutoCheck(value))),
+      Text(_updates.supported ? _updates.status : '更新支持 Windows 和 macOS'),
+      if (_updates.downloading) ...[
+        const SizedBox(height: 12),
+        LinearProgressIndicator(value: _updates.progress),
+        Text(
+            '${(_updates.received / 1024 / 1024).toStringAsFixed(1)} MiB / ${((release?.installer.size ?? 0) / 1024 / 1024).toStringAsFixed(1)} MiB'),
+      ],
+      if (release != null) ...[
+        const SizedBox(height: 12),
+        Text('${release.tag}${release.prerelease ? ' · 预览版' : ''}',
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+        if (release.notes.isNotEmpty)
+          ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: SingleChildScrollView(
+                  child: SelectableText(release.notes,
+                      style: const TextStyle(fontSize: 12)))),
+      ],
+      const SizedBox(height: 12),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        OutlinedButton.icon(
+            onPressed: !_updates.supported || busy
+                ? null
+                : () => unawaited(_updates.check()),
+            icon: const Icon(Icons.refresh),
+            label: Text(_updates.checking ? '正在检查…' : '检查更新')),
+        if (release != null &&
+            _updates.downloadedFile == null &&
+            !_updates.downloading)
+          FilledButton.icon(
+              onPressed: busy ? null : () => unawaited(_updates.download()),
+              icon: const Icon(Icons.download_outlined),
+              label: const Text('下载更新')),
+        if (_updates.downloading)
+          TextButton(
+              onPressed: _updates.cancelDownload, child: const Text('取消下载')),
+        if (_updates.downloadedFile != null)
+          FilledButton.icon(
+              onPressed: busy ? null : () => unawaited(_installUpdate()),
+              icon: const Icon(Icons.install_desktop),
+              label: const Text('安装更新…')),
+      ]),
+    ]));
+  }
+
+  Future<void> _installUpdate() async {
+    if (_installingUpdate) return;
+    setState(() => _installingUpdate = true);
+    try {
+      final approved = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+                title: const Text('安装更新'),
+                content: Text(
+                    '将断开所有控制连接，打开 ${_updates.available?.tag ?? '新版本'} 安装包并退出 LAN Bridge。\n\n${_updates.operatingSystem == 'macos' ? '请在打开的磁盘镜像中将 LAN Bridge 拖入 Applications，替换旧版本后重新打开。' : '请按安装向导完成更新，安装后重新打开应用。'}'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('稍后安装')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('打开安装包并退出')),
+                ],
+              ));
+      if (approved != true || !mounted) return;
+      await _run(() async {
+        await _prepareQuit();
+        await _updates.openInstaller();
+        await _desktopLifecycle.quit();
+      });
+    } finally {
+      if (mounted) setState(() => _installingUpdate = false);
+    }
   }
 
   Widget _preferencesPanel() {
