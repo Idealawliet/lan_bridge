@@ -111,10 +111,10 @@ const Value* Field(const Map& map, const char* name) {
 bool Number(const Map& map, const char* name, double& output) {
   const Value* value = Field(map, name);
   if (!value) return false;
-  if (const auto* number = std::get_if<double>(value)) output = *number;
-  else if (const auto* number = std::get_if<int32_t>(value)) output = *number;
-  else if (const auto* number = std::get_if<int64_t>(value)) {
-    output = static_cast<double>(*number);
+  if (const auto* floating = std::get_if<double>(value)) output = *floating;
+  else if (const auto* integer32 = std::get_if<int32_t>(value)) output = *integer32;
+  else if (const auto* integer64 = std::get_if<int64_t>(value)) {
+    output = static_cast<double>(*integer64);
   } else return false;
   return std::isfinite(output);
 }
