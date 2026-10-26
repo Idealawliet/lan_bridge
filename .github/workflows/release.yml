@@ -70,7 +70,12 @@ jobs:
           '```text' | Add-Content $env:GITHUB_STEP_SUMMARY
           Get-Content $log -Tail 160 | Add-Content $env:GITHUB_STEP_SUMMARY
           '```' | Add-Content $env:GITHUB_STEP_SUMMARY
-          if ($failed) { exit 1 }
+          if ($failed) {
+            $message = (Get-Content $log -Tail 120) -join "`n"
+            $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows native build diagnostics::$message"
+            exit 1
+          }
       - name: Smoke test Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -120,7 +125,7 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$mount/LAN Bridge.app"
             echo 'Checking universal architecture'
             lipo -info "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
-            lipo -verify_arch arm64 x86_64 "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge"
+            lipo "$mount/LAN Bridge.app/Contents/MacOS/lan_bridge" -verify_arch arm64 x86_64
           ) 2>&1 | tee "$RUNNER_TEMP/macos-smoke.log"
           result=${PIPESTATUS[0]}
           {
@@ -129,6 +134,13 @@ jobs:
             tail -n 100 "$RUNNER_TEMP/macos-smoke.log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$result" -ne 0 ]; then
+            message="$(tail -n 80 "$RUNNER_TEMP/macos-smoke.log")"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\r'/'%0D'}"
+            message="${message//$'\n'/'%0A'}"
+            printf '::error title=macOS installer diagnostics::%s\n' "$message"
+          fi
           exit "$result"
       - uses: actions/upload-artifact@v4
         with:
