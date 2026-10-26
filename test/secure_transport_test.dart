@@ -7,21 +7,36 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lan_bridge/core/secure_transport.dart';
 
 void main() {
-  test('pairing secrets contain 256 bits and are freshly generated', () {
-    final first = generatePairingKey();
-    final second = generatePairingKey();
-    expect(first, matches(RegExp(r'^[A-Za-z0-9_-]{43}$')));
-    expect(base64Url.decode(base64Url.normalize(first)), hasLength(32));
-    expect(second, isNot(first));
+  test('pairing PINs are exactly six decimal digits', () {
+    for (var i = 0; i < 100; i++) {
+      expect(generatePairingPin(), matches(RegExp(r'^\d{6}$')));
+    }
   });
 
-  test('rejects malformed keys before opening a listener or connecting',
+  test('rejects malformed PINs before opening a socket', () async {
+    for (final value in ['12345', '1234567', 'abc123', '']) {
+      await expectLater(SecureListener.bind(pairingKey: value, port: 0),
+          throwsA(isA<FormatException>()));
+    }
+  });
+
+  test('leading zero PIN authenticates and legacy credentials are rejected',
       () async {
-    await expectLater(SecureListener.bind(pairingKey: '123456', port: 0),
-        throwsA(isA<FormatException>()));
+    final listener = await SecureListener.bind(
+        pairingKey: '001234', port: 0, address: InternetAddress.loopbackIPv4);
+    addTearDown(listener.close);
+    final accepted = listener.peers.first;
+    final client = await connectSecurePeer(
+        host: '127.0.0.1', port: listener.port, pairingKey: '001234');
+    final server = await accepted;
+    addTearDown(client.close);
+    addTearDown(server.close);
+    final received = server.messages.first;
+    await client.send({'type': 'ping'});
+    expect(await received, {'type': 'ping'});
     await expectLater(
-        connectSecurePeer(host: '127.0.0.1', pairingKey: '123456'),
-        throwsA(isA<FormatException>()));
+        SecureListener.bind(pairingKey: generatePairingKey(), port: 0),
+        throwsFormatException);
   });
 
   test('authenticates, encrypts both directions, and preserves queued ordering',
@@ -58,20 +73,16 @@ void main() {
     expect(await message, {'type': 'ping'});
   });
 
-  test('wrong pairing key cannot create an authenticated peer', () async {
+  test('wrong six-digit PIN cannot create an authenticated peer', () async {
     final listener = await SecureListener.bind(
-        pairingKey: generatePairingKey(),
-        port: 0,
-        address: InternetAddress.loopbackIPv4);
+        pairingKey: '123456', port: 0, address: InternetAddress.loopbackIPv4);
     addTearDown(listener.close);
     final accepted = <SecurePeer>[];
     final subscription = listener.peers.listen(accepted.add);
     addTearDown(subscription.cancel);
     await expectLater(
         connectSecurePeer(
-            host: '127.0.0.1',
-            port: listener.port,
-            pairingKey: generatePairingKey()),
+            host: '127.0.0.1', port: listener.port, pairingKey: '654321'),
         throwsA(isA<FormatException>()));
     expect(accepted, isEmpty);
   });
@@ -93,7 +104,7 @@ void main() {
   test('oversized unauthenticated frame is dropped without a trailing newline',
       () async {
     final listener = await SecureListener.bind(
-        pairingKey: generatePairingKey(),
+        pairingKey: generatePairingPin(),
         port: 0,
         address: InternetAddress.loopbackIPv4);
     addTearDown(listener.close);
@@ -107,7 +118,7 @@ void main() {
   test('idle unauthenticated sockets are closed after the handshake deadline',
       () async {
     final listener = await SecureListener.bind(
-        pairingKey: generatePairingKey(),
+        pairingKey: generatePairingPin(),
         port: 0,
         address: InternetAddress.loopbackIPv4);
     addTearDown(listener.close);
@@ -156,7 +167,7 @@ class _Pair {
   final SecurePeer server;
 
   static Future<_Pair> open() async {
-    final key = generatePairingKey();
+    final key = generatePairingPin();
     final listener = await SecureListener.bind(
         pairingKey: key, port: 0, address: InternetAddress.loopbackIPv4);
     final accepted = listener.peers.first;
@@ -186,7 +197,7 @@ class _Proxy {
   late SecurePeer client;
 
   static Future<_Proxy> open({bool tamper = false, bool replay = false}) async {
-    final key = generatePairingKey();
+    final key = generatePairingPin();
     final listener = await SecureListener.bind(
         pairingKey: key, port: 0, address: InternetAddress.loopbackIPv4);
     final relay = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);

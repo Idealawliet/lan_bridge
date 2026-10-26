@@ -18,12 +18,47 @@ class _PreviewController extends BridgeController {
   Future<void> disconnect() async {}
 }
 
+class _ConnectedPreviewController extends _PreviewController {
+  @override
+  Future<void> initialize() async {
+    await super.initialize();
+    phase = ConnectionPhase.connected;
+  }
+
+  @override
+  Future<void> updateArrangement(PeerSide value, double offset) async {
+    side = value;
+    screenOffset = offset;
+    notifyListeners();
+  }
+}
+
 class _PreviewDiscovery extends LanDiscovery {
   @override
   Future<void> start({int port = LanDiscovery.discoveryPort}) async {}
 }
 
 void main() {
+  testWidgets('connected source keeps screen dragging enabled', (tester) async {
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = _ConnectedPreviewController();
+    await tester
+        .pumpWidget(MaterialApp(home: BridgeDashboard(controller: controller)));
+    await tester.pumpAndSettle();
+    final target = find.byKey(const ValueKey('screen-local-peer'));
+    final size = tester.getSize(target);
+    await tester.drag(target, Offset(-size.width, -size.height),
+        kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(controller.side, PeerSide.top);
+    expect(controller.connected, isTrue);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('server lists discovered clients and requires explicit pairing',
       (tester) async {
     tester.view.physicalSize = const Size(800, 1100);
@@ -35,7 +70,7 @@ void main() {
     await tester
         .pumpWidget(MaterialApp(home: BridgeDashboard(workspace: workspace)));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('发现设备'));
+    await tester.tap(find.text('启动服务端'));
     await tester.pumpAndSettle();
     discovery.ingest({
       'op': 'client',
@@ -54,7 +89,7 @@ void main() {
     await tester.dragFrom(card, targetBox.center - card,
         kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
-    expect(find.text('客户端配对密钥'), findsOneWidget);
+    expect(find.text('客户端 PIN 码'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect(workspace.computers, isEmpty);
@@ -63,7 +98,7 @@ void main() {
   });
 
   testWidgets(
-      'drag layout changes direction and network mode stays independent',
+      'layout can change and settings combine computer and connection roles',
       (tester) async {
     tester.view.physicalSize = const Size(800, 1000);
     tester.view.devicePixelRatio = 1;
@@ -81,16 +116,20 @@ void main() {
         kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
     expect(controller.side, PeerSide.top);
-    await tester.ensureVisible(find.text('连接设置'));
-    await tester.tap(find.text('连接设置'));
+    expect(find.text('连接设置'), findsNothing);
+    await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
-    final server = find.text('服务端 · 等待连接');
-    await tester.ensureVisible(server);
-    await tester.tap(server);
+    expect(find.text('连接设置'), findsOneWidget);
+    final client = find.text('客户端 · 被控电脑');
+    await tester.ensureVisible(client);
+    await tester.tap(client);
     await tester.pumpAndSettle();
-    expect(controller.connectionMode, ConnectionMode.server);
-    expect(controller.role, BridgeRole.source);
-    expect(find.text('等待客户端连接'), findsOneWidget);
+    expect(controller.connectionMode, ConnectionMode.client);
+    expect(controller.role, BridgeRole.target);
+    expect(find.text('允许被发现'), findsNothing);
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
+    expect(find.text('启动客户端'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
   for (final size in [

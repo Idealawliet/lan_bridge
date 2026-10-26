@@ -42,12 +42,8 @@ class BridgeController extends ChangeNotifier {
   final bool _preferencesAvailable;
   final LoginStartup _startup;
   Future<void> _settingsQueue = Future.value();
-  ConnectionMode? _connectionMode;
   ConnectionMode get connectionMode =>
-      _connectionMode ??
-      (role == BridgeRole.source
-          ? ConnectionMode.client
-          : ConnectionMode.server);
+      role == BridgeRole.source ? ConnectionMode.server : ConnectionMode.client;
   double screenOffset = 0;
   ScreenArrangement get arrangement => ScreenArrangement(side, screenOffset);
   bool loginStartup = false, startupBusy = false;
@@ -70,7 +66,8 @@ class BridgeController extends ChangeNotifier {
 
   void setConnectionMode(ConnectionMode value) {
     if (phase != ConnectionPhase.idle) return;
-    _connectionMode = value;
+    role =
+        value == ConnectionMode.server ? BridgeRole.source : BridgeRole.target;
     _saveSettings();
     _notify();
   }
@@ -124,7 +121,7 @@ class BridgeController extends ChangeNotifier {
           : Platform.operatingSystem;
   String get statusText => switch (phase) {
         ConnectionPhase.idle => '未连接',
-        ConnectionPhase.listening => '服务端等待连接',
+        ConnectionPhase.listening => '等待服务端连接',
         ConnectionPhase.connecting => '正在建立安全连接',
         ConnectionPhase.connected => remoteActive ? '正在控制被控电脑' : '已连接 · 键鼠在主机',
       };
@@ -186,9 +183,6 @@ class BridgeController extends ChangeNotifier {
         final data = await _settings.load();
         role = BridgeRole.values
             .firstWhere((v) => v.name == data['role'], orElse: () => role);
-        _connectionMode = ConnectionMode.values.firstWhere(
-            (v) => v.name == data['connectionMode'],
-            orElse: () => connectionMode);
         side = PeerSide.values
             .firstWhere((v) => v.name == data['side'], orElse: () => side);
         final offset = data['offset'];
@@ -313,8 +307,7 @@ class BridgeController extends ChangeNotifier {
   }
 
   Future<void> listen({bool discoveredClient = false}) async {
-    if (phase != ConnectionPhase.idle ||
-        (connectionMode != ConnectionMode.server && !discoveredClient)) {
+    if (phase != ConnectionPhase.idle) {
       return;
     }
     error = null;
@@ -324,7 +317,7 @@ class BridgeController extends ChangeNotifier {
     try {
       await _checkReady();
       if (epoch != _epoch) return;
-      pairingKey = generatePairingKey();
+      pairingKey = generatePairingPin();
       final listener =
           await SecureListener.bind(pairingKey: pairingKey, port: port);
       if (epoch != _epoch) {
@@ -348,8 +341,7 @@ class BridgeController extends ChangeNotifier {
   }
 
   Future<void> connect(String host, String key) async {
-    if (phase != ConnectionPhase.idle ||
-        connectionMode != ConnectionMode.client) {
+    if (phase != ConnectionPhase.idle) {
       return;
     }
     error = null;
@@ -359,7 +351,9 @@ class BridgeController extends ChangeNotifier {
     try {
       await _checkReady();
       if (epoch != _epoch) return;
-      if (host.trim().isEmpty) throw const FormatException('请输入服务端的局域网 IP');
+      if (host.trim().isEmpty || host.trim() == '0.0.0.0') {
+        throw const FormatException('请输入对端实际的局域网 IP 地址');
+      }
       final peer = await connectSecurePeer(
           host: host.trim(), pairingKey: key.trim(), port: port);
       if (epoch != _epoch) {
@@ -447,7 +441,7 @@ class BridgeController extends ChangeNotifier {
           if (epoch != _epoch) return;
           if (!hello.isCompleted) {
             if (message['type'] != 'hello' ||
-                message['version'] != 5 ||
+                message['version'] != 6 ||
                 message['role'] !=
                     (role == BridgeRole.source ? 'target' : 'source') ||
                 message['screen'] is! Map) {
@@ -479,7 +473,11 @@ class BridgeController extends ChangeNotifier {
         });
       }, onError: (Object e) {
         if (!hello.isCompleted) hello.completeError(e);
-        unawaited(_fail('连接已中断：$e', epoch));
+        unawaited(_fail(
+            e is SocketException
+                ? '与 ${peer.remoteAddress} 的连接被对端关闭，键鼠已恢复。请确认两端均使用新版客户端并重新配对。'
+                : '连接已中断：$e',
+            epoch));
       }, onDone: () {
         if (!hello.isCompleted) hello.completeError(StateError('对方关闭了连接'));
         unawaited(_fail('对方已断开连接，键鼠已恢复本机', epoch));
@@ -520,7 +518,7 @@ class BridgeController extends ChangeNotifier {
           const Duration(milliseconds: 500), (_) => _tick(epoch));
       await peer.send({
         'type': 'hello',
-        'version': 5,
+        'version': 6,
         'role': role.name,
         'side': side.name,
         'offset': screenOffset,

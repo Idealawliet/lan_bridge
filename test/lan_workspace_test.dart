@@ -71,6 +71,44 @@ Future<void> until(bool Function() predicate) async {
 }
 
 void main() {
+  test('client starts discovery automatically and waits again after disconnect',
+      () async {
+    final input = FakeNative();
+    final local = BridgeController(input: input, port: 0, enableSharing: false);
+    final discovery = FakeDiscovery();
+    final workspace = LanWorkspace(local,
+        input: input, discovery: discovery, enableSharing: false);
+    final sourceInput = FakeNative();
+    late BridgeController source;
+    addTearDown(() async {
+      await workspace.close();
+      await source.disconnect();
+      source.dispose();
+      local.dispose();
+      await input.bus.close();
+      await sourceInput.bus.close();
+    });
+    await workspace.startClient();
+    expect(local.role, BridgeRole.target);
+    expect(local.connectionMode, ConnectionMode.client);
+    expect(local.listening, isTrue);
+    expect(local.pairingKey, matches(RegExp(r'^\d{6}$')));
+    expect(discovery.advertisement, isNotNull);
+    expect(discovery.advertisement!()['busy'], isFalse);
+    source = BridgeController(
+        input: sourceInput, port: local.port, enableSharing: false);
+    await source.connect('127.0.0.1', local.pairingKey);
+    await until(() => local.connected);
+    expect(discovery.advertisement!()['busy'], isTrue);
+    await source.disconnect();
+    await until(() => local.listening && !workspace.busy);
+    expect(local.pairingKey, matches(RegExp(r'^\d{6}$')));
+    expect(discovery.advertisement!()['busy'], isFalse);
+    await workspace.stop();
+    expect(local.phase, ConnectionPhase.idle);
+    expect(discovery.advertisement, isNull);
+  });
+
   test(
       'three clients remain connected, input is isolated and focus switches by edge',
       () async {
@@ -192,7 +230,7 @@ void main() {
             port: client.port,
             busy: false,
             seen: DateTime.now()),
-        generatePairingKey(),
+        '000000',
         PeerSide.right);
     expect(workspace.computers, isEmpty);
     expect(workspace.router.channels, isEmpty);

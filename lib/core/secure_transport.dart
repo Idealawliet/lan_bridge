@@ -16,8 +16,12 @@ final _random = Random.secure();
 final _hmac = Hmac.sha256();
 final _cipher = AesGcm.with256bits();
 
-/// A fresh 256-bit pairing secret. Share it through a trusted channel only.
+/// Random discovery identifier; never use this value as a pairing credential.
 String generatePairingKey() => _encode(_randomBytes(32));
+
+/// A fresh six-digit pairing PIN, including leading zeroes.
+String generatePairingPin() =>
+    _random.nextInt(1000000).toString().padLeft(6, '0');
 
 /// One authenticated, encrypted TCP session. Messages have exactly one listener.
 /// Input is never written to the socket until both peers prove the pairing key.
@@ -185,6 +189,7 @@ class SecureListener {
   final _pending = <_FrameChannel>{};
   late final StreamSubscription<Socket> _subscription;
   SecurePeer? _active;
+  final _attempts = <DateTime>[];
   bool _reserved = false;
   bool _closed = false;
 
@@ -192,10 +197,18 @@ class SecureListener {
   int get port => _server.port;
 
   void _accept(Socket socket) {
+    final now = DateTime.now();
+    _attempts.removeWhere(
+        (time) => now.difference(time) >= const Duration(minutes: 1));
+    if (_attempts.length >= 5) {
+      socket.destroy();
+      return;
+    }
     if (_closed || _active != null || _reserved || _pending.length >= 4) {
       socket.destroy();
       return;
     }
+    _attempts.add(now);
     final channel = _FrameChannel(socket);
     _pending.add(channel);
     unawaited(_authenticate(channel));
@@ -275,6 +288,9 @@ Future<_SessionKeys> _clientHandshake(
   _expectHandshake(challenge, 'challenge');
   final serverNonce = _decodeField(challenge, 'nonce', exactLength: 32);
   final transcript = _transcript(clientNonce, serverNonce);
+  secret =
+      await Pbkdf2(macAlgorithm: Hmac.sha256(), iterations: 100000, bits: 256)
+          .deriveKey(secretKey: secret, nonce: transcript);
   await _verifyProof(challenge, secret, transcript, 'server');
   await channel.write({
     'v': 1,
@@ -294,6 +310,9 @@ Future<_SessionKeys> _serverHandshake(
   final clientNonce = _decodeField(hello, 'nonce', exactLength: 32);
   final serverNonce = _randomBytes(32);
   final transcript = _transcript(clientNonce, serverNonce);
+  secret =
+      await Pbkdf2(macAlgorithm: Hmac.sha256(), iterations: 100000, bits: 256)
+          .deriveKey(secretKey: secret, nonce: transcript);
   await channel.write({
     'v': 1,
     'type': 'challenge',
@@ -337,7 +356,7 @@ Future<void> _verifyProof(Map<String, dynamic> frame, SecretKey key,
     difference |= expected[index] ^ received[index];
   }
   if (difference != 0) {
-    throw const FormatException('Pairing authentication failed');
+    throw const FormatException('PIN 码不正确，请核对客户端显示的 6 位数字');
   }
 }
 
@@ -366,16 +385,11 @@ List<int> _randomBytes(int count) =>
 String _encode(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
 
 List<int> _decodePairingKey(String value) {
-  final key = value.trim();
-  if (!RegExp(r'^[A-Za-z0-9_-]{43}=?$').hasMatch(key)) {
-    throw const FormatException(
-        'Pairing key must be a 256-bit base64url secret');
+  final pin = value.trim();
+  if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
+    throw const FormatException('请输入 6 位数字 PIN 码');
   }
-  final bytes = base64Url.decode(base64Url.normalize(key));
-  if (bytes.length != 32 || _encode(bytes) != key.replaceAll('=', '')) {
-    throw const FormatException('Invalid pairing key');
-  }
-  return bytes;
+  return utf8.encode(pin);
 }
 
 List<int> _decodeField(Map<String, dynamic> frame, String name,

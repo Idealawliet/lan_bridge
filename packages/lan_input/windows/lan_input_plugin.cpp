@@ -236,6 +236,7 @@ class NativeBridge {
   }
 
   void StopCapture() {
+    RestoreCursor();
     remote_ = false;
     if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
     if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
@@ -246,6 +247,13 @@ class NativeBridge {
     physical_buttons_.clear();
     std::lock_guard<std::mutex> lock(event_mutex_);
     event_queue_.clear();
+  }
+
+  void RestoreCursor() {
+    while (cursor_hide_calls_ > 0) {
+      ShowCursor(TRUE);
+      --cursor_hide_calls_;
+    }
   }
 
   std::string SetRemote(bool enabled, bool file_drag = false) {
@@ -273,7 +281,13 @@ class NativeBridge {
         remote_ = false;
         return "Windows rejected cursor positioning";
       }
+      int visibility;
+      do {
+        visibility = ShowCursor(FALSE);
+        ++cursor_hide_calls_;
+      } while (visibility >= 0);
     } else {
+      RestoreCursor();
       GetCursorPos(&last_mouse_);
     }
     return {};
@@ -450,6 +464,7 @@ class NativeBridge {
       } else if (event_queue_.size() < 2048) {
         event_queue_.push_back(std::move(event));
       } else {
+        RestoreCursor();
         remote_ = false;
         ReleaseAll();
         event_queue_.clear();
@@ -515,6 +530,7 @@ class NativeBridge {
     const bool control = keys.count(0xe0) || keys.count(0xe4);
     const bool alt = keys.count(0xe2) || keys.count(0xe6);
     if (down && event.vkCode == VK_ESCAPE && control && alt) {
+      self->RestoreCursor();
       self->remote_ = false;
       self->ReleaseAll();
       self->Emit({{Value("type"), Value("emergency")}});
@@ -599,6 +615,7 @@ class NativeBridge {
   HHOOK keyboard_hook_ = nullptr;
   HHOOK mouse_hook_ = nullptr;
   bool remote_ = false;
+  int cursor_hide_calls_ = 0;
   ULONGLONG last_heartbeat_ = 0;
   POINT anchor_{};
   POINT last_mouse_{};

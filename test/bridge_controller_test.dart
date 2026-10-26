@@ -344,7 +344,7 @@ void main() {
     });
     await peer.send({
       'type': 'hello',
-      'version': 5,
+      'version': 6,
       'role': 'source',
       'side': 'right',
       'offset': 0.0,
@@ -378,7 +378,7 @@ void main() {
     });
     await peer.send({
       'type': 'hello',
-      'version': 5,
+      'version': 6,
       'role': 'source',
       'side': 'right',
       'offset': 0.0,

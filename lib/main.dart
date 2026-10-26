@@ -98,12 +98,9 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
   late final _workspace = widget.workspace ?? LanWorkspace(_localBridge);
   BridgeController get _bridge => _workspace.active?.controller ?? _localBridge;
   final _address = TextEditingController();
-  final _key = TextEditingController();
-  final _form = GlobalKey<FormState>();
   late final AppLifecycleListener _lifecycle;
   late final DesktopLifecycle _desktopLifecycle;
   bool _initializing = true;
-  bool _showKey = false;
 
   bool get _locked =>
       _initializing ||
@@ -160,13 +157,6 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     }
   }
 
-  void _connect() {
-    if (_form.currentState?.validate() ?? false) {
-      unawaited(
-          _run(() => _bridge.connect(_address.text.trim(), _key.text.trim())));
-    }
-  }
-
   @override
   void dispose() {
     _lifecycle.dispose();
@@ -175,7 +165,6 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     _localBridge.removeListener(_refresh);
     unawaited(_workspace.close().whenComplete(_localBridge.dispose));
     _address.dispose();
-    _key.dispose();
     super.dispose();
   }
 
@@ -202,38 +191,6 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                         if (_bridge.error != null)
                           _notice(Icons.error_outline, '连接异常', _bridge.error!,
                               warning: true),
-                        if (!_workspace.running)
-                          Material(
-                              color: Colors.transparent,
-                              child: ExpansionTile(
-                                  title: const Text('连接设置',
-                                      style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600)),
-                                  leading: const Icon(Icons.tune, size: 20),
-                                  shape: const Border(),
-                                  collapsedShape: const Border(),
-                                  children: [
-                                    LayoutBuilder(
-                                        builder: (context, c) => c.maxWidth <
-                                                760
-                                            ? Column(children: [
-                                                _rolePanel(),
-                                                const SizedBox(height: 12),
-                                                _connectionPanel()
-                                              ])
-                                            : Row(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                    Expanded(
-                                                        child: _rolePanel()),
-                                                    const SizedBox(width: 16),
-                                                    Expanded(
-                                                        child:
-                                                            _connectionPanel())
-                                                  ]))
-                                  ])),
                         if (_bridge.files != null) ...[
                           const SizedBox(height: 16),
                           _sharingPanel()
@@ -249,6 +206,12 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
       children: [
         const _Brand(),
         const Spacer(),
+        IconButton(
+          tooltip: '设置',
+          onPressed: _openSettings,
+          icon: const Icon(Icons.settings_outlined),
+        ),
+        const SizedBox(width: 8),
         Container(
           decoration: BoxDecoration(
               color: Colors.white,
@@ -266,6 +229,34 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     );
   }
 
+  Future<void> _openSettings() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AnimatedBuilder(
+        animation: _workspace,
+        builder: (context, _) => AlertDialog(
+          title: const Text('设置'),
+          content: SizedBox(
+            width: 640,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                _rolePanel(),
+                const SizedBox(height: 16),
+                _connectionPanel(),
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('完成'),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _joinDevice(LanDevice device,
       {PeerSide? initialSide, double initialOffset = 0}) async {
     final key = TextEditingController();
@@ -275,58 +266,76 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                 .any((m) => m.controller.side == side),
             orElse: () => PeerSide.right);
     var offset = initialOffset;
+    final pinForm = GlobalKey<FormState>();
     final approved = await showDialog<bool>(
         context: context,
         builder: (context) => StatefulBuilder(
             builder: (context, update) => AlertDialog(
                   title: Text('加入 ${device.name}'),
-                  content: SizedBox(
-                      width: 380,
-                      child: SingleChildScrollView(
-                          child:
-                              Column(mainAxisSize: MainAxisSize.min, children: [
-                        Text(
-                            '${device.host}:${device.port} · ${device.platform}'),
-                        const SizedBox(height: 12),
-                        const Text('核对客户端名称与地址，输入该客户端显示的完整配对密钥。'),
-                        const SizedBox(height: 12),
-                        TextField(
-                            controller: key,
-                            obscureText: true,
-                            autocorrect: false,
-                            enableSuggestions: false,
-                            decoration:
-                                const InputDecoration(labelText: '客户端配对密钥')),
-                        const SizedBox(height: 16),
-                        Wrap(spacing: 8, children: [
-                          for (final entry in const {
-                            PeerSide.left: '左',
-                            PeerSide.right: '右',
-                            PeerSide.top: '上',
-                            PeerSide.bottom: '下'
-                          }.entries)
-                            ChoiceChip(
-                                label: Text(entry.value),
-                                selected: side == entry.key,
-                                onSelected: (_) =>
-                                    update(() => side = entry.key))
-                        ]),
-                        const Text('相对于服务端主屏幕的位置'),
-                        Slider(
-                            value: offset,
-                            min: -.9,
-                            max: .9,
-                            label: '${(offset * 100).round()}%',
-                            onChanged: (value) => update(() => offset = value)),
-                        const Text('相接区域重叠时，优先进入当前选中的客户端。',
-                            style: TextStyle(fontSize: 12)),
-                      ]))),
+                  content: Form(
+                      key: pinForm,
+                      child: SizedBox(
+                          width: 380,
+                          child: SingleChildScrollView(
+                              child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                Text(
+                                    '${device.host}:${device.port} · ${device.platform}'),
+                                const SizedBox(height: 12),
+                                const Text('核对客户端名称与地址，输入该客户端显示的6 位 PIN 码。'),
+                                const SizedBox(height: 12),
+                                TextFormField(
+                                    controller: key,
+                                    autofocus: true,
+                                    keyboardType: TextInputType.number,
+                                    inputFormatters: [
+                                      FilteringTextInputFormatter.digitsOnly,
+                                      LengthLimitingTextInputFormatter(6)
+                                    ],
+                                    validator: (value) =>
+                                        RegExp(r'^\d{6}$').hasMatch(value ?? '')
+                                            ? null
+                                            : '请输入 6 位数字 PIN 码',
+                                    autocorrect: false,
+                                    enableSuggestions: false,
+                                    decoration: const InputDecoration(
+                                        labelText: '客户端 PIN 码')),
+                                const SizedBox(height: 16),
+                                Wrap(spacing: 8, children: [
+                                  for (final entry in const {
+                                    PeerSide.left: '左',
+                                    PeerSide.right: '右',
+                                    PeerSide.top: '上',
+                                    PeerSide.bottom: '下'
+                                  }.entries)
+                                    ChoiceChip(
+                                        label: Text(entry.value),
+                                        selected: side == entry.key,
+                                        onSelected: (_) =>
+                                            update(() => side = entry.key))
+                                ]),
+                                const Text('相对于服务端主屏幕的位置'),
+                                Slider(
+                                    value: offset,
+                                    min: -.9,
+                                    max: .9,
+                                    label: '${(offset * 100).round()}%',
+                                    onChanged: (value) =>
+                                        update(() => offset = value)),
+                                const Text('相接区域重叠时，优先进入当前选中的客户端。',
+                                    style: TextStyle(fontSize: 12)),
+                              ])))),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(context, false),
                         child: const Text('取消')),
                     FilledButton(
-                        onPressed: () => Navigator.pop(context, true),
+                        onPressed: () {
+                          if (pinForm.currentState!.validate()) {
+                            Navigator.pop(context, true);
+                          }
+                        },
                         child: const Text('加入控制组'))
                   ],
                 )));
@@ -343,50 +352,61 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
     final workspace = _workspace;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (!workspace.running)
-        Wrap(spacing: 12, runSpacing: 8, children: [
-          FilledButton.icon(
-              onPressed: !_canStart ||
-                      workspace.busy ||
-                      _localBridge.phase != ConnectionPhase.idle
-                  ? null
-                  : () => unawaited(_run(workspace.startServer)),
-              icon: const Icon(Icons.hub_outlined),
-              label: const Text('发现设备')),
-          OutlinedButton.icon(
-              onPressed: !_canStart ||
-                      workspace.busy ||
-                      _localBridge.phase != ConnectionPhase.idle
-                  ? null
-                  : () => unawaited(_run(workspace.startClient)),
-              icon: const Icon(Icons.wifi_find),
-              label: const Text('允许被发现')),
-        ])
+        FilledButton.icon(
+          onPressed: !_canStart || workspace.busy
+              ? null
+              : () => unawaited(_run(_localBridge.role == BridgeRole.source
+                  ? workspace.startServer
+                  : workspace.startClient)),
+          icon: Icon(_localBridge.role == BridgeRole.source
+              ? Icons.hub_outlined
+              : Icons.desktop_windows_outlined),
+          label:
+              Text(_localBridge.role == BridgeRole.source ? '启动服务端' : '启动客户端'),
+        )
       else ...[
         Row(children: [
           Expanded(
               child: Text(workspace.serving
-                  ? '●  已连接 ${workspace.computers.length} 台设备'
-                  : '客户端已公开 · ${_localBridge.statusText}')),
+                  ? '服务端 · 已连接 ${workspace.computers.length} 台客户端'
+                  : '客户端 · ${_localBridge.statusText}')),
           TextButton(
-              onPressed:
-                  workspace.busy ? null : () => unawaited(_run(workspace.stop)),
-              child: const Text('停止服务'))
+            onPressed:
+                workspace.busy ? null : () => unawaited(_run(workspace.stop)),
+            child: const Text('停止服务'),
+          ),
         ]),
-        if (!workspace.serving) ...[
-          const SizedBox(height: 8),
-          if (_localBridge.listening) ...[
-            const Text('配对密钥'),
+        if (!workspace.serving && _localBridge.listening)
+          Row(children: [
+            const Text('配对 PIN 码  '),
             SelectableText(_localBridge.pairingKey,
-                style: const TextStyle(fontFamily: 'monospace')),
-            TextButton.icon(
+                style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 24,
+                    letterSpacing: 6,
+                    fontWeight: FontWeight.bold)),
+            IconButton(
                 onPressed: () =>
-                    unawaited(_copy(_localBridge.pairingKey, '客户端配对密钥')),
-                icon: const Icon(Icons.copy),
-                label: const Text('复制密钥')),
-          ] else if (!_localBridge.connected)
-            const Text('会话已结束。停止服务后重新开启可发现模式，生成新密钥。'),
-        ],
+                    unawaited(_copy(_localBridge.pairingKey, 'PIN 码')),
+                tooltip: '复制 PIN 码',
+                icon: const Icon(Icons.copy_outlined)),
+          ]),
       ],
+      if (_bridge.connected)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(children: [
+            const Icon(Icons.mouse, color: _teal, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(
+                    _bridge.remoteActive
+                        ? '当前控制：${workspace.serving ? (workspace.active?.device.name ?? '客户端') : '本机客户端'}'
+                        : '当前控制：${workspace.serving ? '本机服务端' : '服务端电脑'}',
+                    style: const TextStyle(
+                        color: _teal, fontWeight: FontWeight.w700))),
+          ]),
+        ),
       if (workspace.busy) const LinearProgressIndicator(),
       if (workspace.error != null)
         Text(workspace.error!, style: const TextStyle(color: Colors.red)),
@@ -400,14 +420,16 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
             for (final m in _workspace.computers.values)
               ScreenNode(m.device.id, m.device.name, m.controller.side,
                   m.controller.screenOffset,
-                  selected: _workspace.active == m)
+                  selected: _workspace.active == m,
+                  controlling: m.controller.remoteActive)
           ]
         : [
             ScreenNode(
                 'local-peer',
                 _bridge.role == BridgeRole.target ? '本机 · 被控电脑' : '被控电脑',
                 _bridge.side,
-                _bridge.screenOffset)
+                _bridge.screenOffset,
+                controlling: _bridge.remoteActive)
           ];
     return _Panel(
         child: Column(children: [
@@ -417,6 +439,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
       const SizedBox(height: 24),
       ScreenWorkspace(
         nodes: nodes,
+        referenceActive: !_bridge.remoteActive,
         referenceName:
             _bridge.role == BridgeRole.target ? '键鼠主机 · 另一台电脑' : '本机 · 键鼠主机',
         available: multi
@@ -426,7 +449,9 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
             : [],
         enabled: multi
             ? !_workspace.busy
-            : !_locked && _bridge.role == BridgeRole.source,
+            : !_initializing &&
+                !_bridge.busy &&
+                _bridge.role == BridgeRole.source,
         onArrange: (id, side, offset) => unawaited(_run(() => multi
             ? _workspace.arrange(id, side, offset)
             : _bridge.updateArrangement(side, offset))),
@@ -446,263 +471,89 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
   }
 
   Widget _rolePanel() {
+    final local = _localBridge;
     return _Panel(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const _SectionTitle(
-            number: '01', title: '这台电脑的角色', subtitle: '键鼠角色与客户端 / 服务端可分别设置。'),
-        const SizedBox(height: 22),
-        _RoleTile(
-          title: '键鼠主机',
-          description: '键盘和鼠标连接在这台电脑上',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const _SectionTitle(
+          number: '01', title: '这台电脑的角色', subtitle: '服务端提供键鼠，客户端接受控制。'),
+      const SizedBox(height: 18),
+      _RoleTile(
+          title: '服务端 · 键鼠主机',
+          description: '使用本机键鼠控制局域网内的客户端',
           icon: Icons.keyboard_alt_outlined,
-          selected: _bridge.role == BridgeRole.source,
+          selected: local.role == BridgeRole.source,
           onTap: _locked
               ? null
-              : () => unawaited(_run(() => _bridge.setRole(BridgeRole.source))),
-        ),
-        const SizedBox(height: 12),
-        _RoleTile(
-          title: '被控电脑',
-          description: '使用另一台电脑的键鼠操作本机',
+              : () => unawaited(_run(() => local.setRole(BridgeRole.source)))),
+      const SizedBox(height: 12),
+      _RoleTile(
+          title: '客户端 · 被控电脑',
+          description: '启动后自动等待服务端连接，使用 PIN 码配对',
           icon: Icons.desktop_windows_outlined,
-          selected: _bridge.role == BridgeRole.target,
+          selected: local.role == BridgeRole.target,
           onTap: _locked
               ? null
-              : () => unawaited(_run(() => _bridge.setRole(BridgeRole.target))),
-        ),
-        const SizedBox(height: 18),
-        const Divider(height: 28),
-        const Text('网络连接方式', style: TextStyle(fontWeight: FontWeight.w600)),
-        const SizedBox(height: 10),
-        Wrap(spacing: 8, runSpacing: 8, children: [
-          ChoiceChip(
-              label: const Text('客户端 · 主动连接'),
-              selected: _bridge.connectionMode == ConnectionMode.client,
-              onSelected: _locked
-                  ? null
-                  : (_) => _bridge.setConnectionMode(ConnectionMode.client)),
-          ChoiceChip(
-              label: const Text('服务端 · 等待连接'),
-              selected: _bridge.connectionMode == ConnectionMode.server,
-              onSelected: _locked
-                  ? null
-                  : (_) => _bridge.setConnectionMode(ConnectionMode.server)),
-        ]),
-        const SizedBox(height: 8),
-        const Text('两端分别选客户端和服务端；任意一端都可提供键鼠。',
+              : () => unawaited(_run(() => local.setRole(BridgeRole.target)))),
+      const Divider(height: 28),
+      SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('开机自启'),
+          subtitle: const Text('登录后打开应用，连接需手动启动。'),
+          value: local.loginStartup,
+          onChanged: !local.supported || local.startupBusy
+              ? null
+              : (value) => unawaited(local.setLoginStartup(value))),
+      if (local.settingsError != null)
+        Text(local.settingsError!, style: const TextStyle(color: Colors.red)),
+      if (_locked)
+        const Text('停止服务后可切换角色；连接期间可拖拽屏幕调整布局。',
             style: TextStyle(color: _muted, fontSize: 12)),
-        const Divider(height: 28),
-        SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('开机自启', style: TextStyle(fontSize: 14)),
-            subtitle: const Text('登录系统后启动应用，保留角色与布局；连接仍需手动配对。',
-                style: TextStyle(fontSize: 12)),
-            value: _bridge.loginStartup,
-            onChanged: !_bridge.supported || _bridge.startupBusy
-                ? null
-                : (value) => unawaited(_bridge.setLoginStartup(value))),
-        if (_bridge.settingsError != null)
-          Text(_bridge.settingsError!,
-              style: const TextStyle(color: Colors.red, fontSize: 12)),
-        const SizedBox(height: 12),
-        Text(_locked ? '断开连接或停止等待后，可更改角色和布局。' : '另一台电脑请选择与这里不同的角色。',
-            style: const TextStyle(color: _muted, fontSize: 12)),
-      ]),
-    );
+    ]));
   }
 
   Widget _connectionPanel() {
+    final local = _localBridge;
     return _Panel(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _SectionTitle(
-            number: '02',
-            title: _bridge.connectionMode == ConnectionMode.client
-                ? '连接另一台电脑'
-                : '等待客户端连接',
-            subtitle: _bridge.connectionMode == ConnectionMode.client
-                ? '填写服务端电脑显示的局域网地址和密钥。'
-                : '开始等待后，将本机地址和配对密钥交给客户端。'),
-        const SizedBox(height: 22),
-        if (_bridge.connected)
-          _connectedContent()
-        else if (_bridge.connectionMode == ConnectionMode.client)
-          _sourceContent()
-        else
-          _targetContent(),
-      ]),
-    );
-  }
-
-  Widget _sourceContent() {
-    return Form(
-      key: _form,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('服务端 IP 地址',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        TextFormField(
-          controller: _address,
-          enabled: !_bridge.busy,
-          autocorrect: false,
-          enableSuggestions: false,
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(
-              hintText: '例如 192.168.1.24',
-              prefixIcon: Icon(Icons.lan_outlined, size: 19)),
-          validator: (value) =>
-              value == null || value.trim().isEmpty ? '请输入服务端的局域网地址' : null,
-        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const _SectionTitle(
+          number: '02',
+          title: '连接设置',
+          subtitle: '两端启动后，服务端拖入客户端并输入其 6 位 PIN 码。'),
+      const SizedBox(height: 16),
+      Text('本机局域网地址：${local.localAddresses.join('、')}'),
+      if (local.role == BridgeRole.source) ...[
         const SizedBox(height: 16),
-        const Text('配对密钥',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        TextFormField(
-          controller: _key,
-          enabled: !_bridge.busy,
-          obscureText: !_showKey,
-          autocorrect: false,
-          enableSuggestions: false,
-          onFieldSubmitted: (_) {
-            if (_canStart && !_bridge.busy) _connect();
-          },
-          decoration: InputDecoration(
-              hintText: '粘贴另一台电脑的完整密钥',
-              prefixIcon: const Icon(Icons.key_outlined, size: 19),
-              suffixIcon: IconButton(
-                  tooltip: _showKey ? '隐藏密钥' : '显示密钥',
-                  onPressed: () => setState(() => _showKey = !_showKey),
-                  icon: Icon(
-                      _showKey
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                      size: 19))),
-          validator: (value) =>
-              value == null || value.trim().isEmpty ? '请输入完整配对密钥' : null,
-        ),
-        const SizedBox(height: 20),
-        if (_bridge.busy)
-          OutlinedButton.icon(
-              onPressed: () => unawaited(_run(_bridge.disconnect)),
-              icon: const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2)),
-              label: const Text('正在连接 · 取消'))
-        else
-          FilledButton.icon(
-              onPressed: _canStart ? _connect : null,
-              icon: const Icon(Icons.link, size: 19),
-              label: const Text('建立安全连接')),
-      ]),
-    );
-  }
-
-  Widget _targetContent() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const Text('本机局域网地址',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 10),
-      if (_bridge.localAddresses.isEmpty)
-        const Text('未找到局域网地址，请检查网络连接。',
-            style: TextStyle(color: _muted, fontSize: 12))
-      else
-        Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _bridge.localAddresses
-                .map((address) => ActionChip(
-                    avatar: const Icon(Icons.copy_outlined, size: 14),
-                    label: Text(address, style: const TextStyle(fontSize: 12)),
-                    tooltip: '复制 $address',
-                    onPressed: () => unawaited(_copy(address, '地址'))))
-                .toList()),
-      const SizedBox(height: 20),
-      if (_bridge.listening) ...[
-        const Text('本次配对密钥',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
-          decoration: BoxDecoration(
-              color: const Color(0xFFF0F7F3),
-              border: Border.all(color: const Color(0xFFD6E9DF)),
-              borderRadius: BorderRadius.circular(12)),
-          child: Row(children: [
-            Expanded(
-                child: SelectableText(_bridge.pairingKey,
-                    style: const TextStyle(
-                        fontFamily: 'monospace', fontSize: 12, color: _teal))),
-            IconButton(
-                onPressed: () => unawaited(_copy(_bridge.pairingKey, '配对密钥')),
-                tooltip: '复制完整密钥',
-                icon: const Icon(Icons.copy_outlined, size: 18, color: _teal))
-          ]),
-        ),
-        const SizedBox(height: 9),
-        const Text('仅与要连接的电脑共享此密钥。重新等待会生成新密钥。',
-            style: TextStyle(color: _muted, fontSize: 11)),
-        const SizedBox(height: 18),
+        TextField(
+            controller: _address,
+            autocorrect: false,
+            decoration: const InputDecoration(
+                labelText: '客户端 IP 地址', hintText: '例如 192.168.1.24')),
+        const SizedBox(height: 12),
         OutlinedButton.icon(
-            onPressed: () => unawaited(_run(_bridge.disconnect)),
-            icon: const Icon(Icons.stop_circle_outlined, size: 18),
-            label: const Text('停止等待')),
-      ] else ...[
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-              color: _canvas, borderRadius: BorderRadius.circular(12)),
-          child: const Row(children: [
-            Icon(Icons.vpn_key_outlined, color: _muted, size: 23),
-            SizedBox(width: 12),
-            Expanded(
-                child: Text('开始等待时会生成新的配对密钥，验证通过后允许对方控制本机。',
-                    style: TextStyle(color: _muted, fontSize: 12)))
-          ]),
-        ),
-        const SizedBox(height: 20),
-        FilledButton.icon(
-            onPressed: _canStart ? () => unawaited(_run(_bridge.listen)) : null,
-            icon: const Icon(Icons.sensors, size: 19),
-            label: const Text('开始等待连接')),
+            onPressed: !_workspace.running ||
+                    !_workspace.serving ||
+                    _workspace.busy
+                ? null
+                : () async {
+                    final host = _address.text.trim();
+                    if (host.isEmpty || host == '0.0.0.0') {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('请输入客户端实际的局域网 IP 地址')));
+                      return;
+                    }
+                    await _joinDevice(LanDevice(
+                        id: 'manual-$host',
+                        name: host,
+                        platform: 'desktop',
+                        host: host,
+                        port: local.port,
+                        busy: false,
+                        seen: DateTime.now()));
+                  },
+            icon: const Icon(Icons.link),
+            label: const Text('通过 IP 添加客户端')),
       ],
-    ]);
-  }
-
-  Widget _connectedContent() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-            color: const Color(0xFFEAF6F0),
-            borderRadius: BorderRadius.circular(14)),
-        child: Row(children: [
-          const Icon(Icons.check_circle_outline, color: _teal, size: 30),
-          const SizedBox(width: 14),
-          Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                const Text('连接已建立',
-                    style:
-                        TextStyle(color: _teal, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 4),
-                SelectableText(_bridge.peerAddress ?? '已配对设备',
-                    style: const TextStyle(color: _muted, fontSize: 12))
-              ]))
-        ]),
-      ),
-      const SizedBox(height: 20),
-      Text(
-          _bridge.remoteActive
-              ? '键鼠正在控制被控电脑。移回相邻屏幕边缘即可返回。'
-              : '松开按键和鼠标按钮，再将主机鼠标移至设定边缘，即可跨屏控制。',
-          style: const TextStyle(color: _muted, fontSize: 13)),
-      const SizedBox(height: 24),
-      OutlinedButton.icon(
-          onPressed: () => unawaited(_run(_bridge.disconnect)),
-          icon: const Icon(Icons.link_off, size: 19),
-          label: const Text('断开连接')),
-    ]);
+    ]));
   }
 
   Widget _permissionNotice() {

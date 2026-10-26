@@ -38,8 +38,26 @@ class LanWorkspace extends ChangeNotifier {
   }
 
   void _localChanged() {
-    // Advertising resumes only with explicit user action after disconnect.
+    if (running &&
+        !serving &&
+        !busy &&
+        !_stopping &&
+        local.phase == ConnectionPhase.idle) {
+      unawaited(_resumeClient());
+    }
     _notify();
+  }
+
+  Future<void> _resumeClient() async {
+    busy = true;
+    try {
+      await Future<void>.delayed(Duration.zero);
+      if (!running || _stopping || local.phase != ConnectionPhase.idle) return;
+      await local.listen(discoveredClient: true);
+    } finally {
+      busy = false;
+      _notify();
+    }
   }
 
   Future<void> startServer() async {
@@ -88,7 +106,7 @@ class LanWorkspace extends ChangeNotifier {
       serving = false;
     } catch (e) {
       await local.disconnect();
-      error = '无法公开客户端：$e';
+      error = '无法启动客户端：$e';
     } finally {
       busy = false;
       _notify();

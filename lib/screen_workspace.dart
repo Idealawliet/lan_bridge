@@ -4,11 +4,12 @@ import 'core/lan_discovery.dart';
 
 class ScreenNode {
   const ScreenNode(this.id, this.name, this.side, this.offset,
-      {this.selected = false});
+      {this.selected = false, this.controlling = false});
   final String id, name;
   final PeerSide side;
   final double offset;
   final bool selected;
+  final bool controlling;
 }
 
 class EdgeSnap {
@@ -66,7 +67,8 @@ class ScreenWorkspace extends StatefulWidget {
       this.onClose,
       this.closeEnabled = true,
       this.enabled = true,
-      this.referenceName = '本机 · 键鼠主机'});
+      this.referenceActive = true,
+      this.referenceName = '本机 · 服务端'});
   final List<ScreenNode> nodes;
   final List<LanDevice> available;
   final void Function(String id, PeerSide side, double offset) onArrange;
@@ -76,6 +78,7 @@ class ScreenWorkspace extends StatefulWidget {
   final bool enabled;
   final bool closeEnabled;
   final String referenceName;
+  final bool referenceActive;
   @override
   State<ScreenWorkspace> createState() => _ScreenWorkspaceState();
 }
@@ -286,9 +289,9 @@ class _ScreenWorkspaceState extends State<ScreenWorkspace> {
                         left: origin.dx,
                         top: origin.dy,
                         child: _card(widget.referenceName,
-                            selected: true,
+                            selected: widget.referenceActive,
                             host: true,
-                            subtitle: '键鼠主机',
+                            subtitle: widget.referenceActive ? '● 当前控制' : '服务端',
                             width: tile.width)),
                     if (_dragging != null &&
                         EdgeSnap.near(_draft, tile) != null)
@@ -356,15 +359,17 @@ class _ScreenWorkspaceState extends State<ScreenWorkspace> {
                                     setState(() => _dragging = null),
                                 child: Stack(children: [
                                   _card(node.name,
-                                      selected: node.selected,
+                                      selected: node.controlling,
                                       width: tile.width,
                                       subtitle: _dragging == node.id &&
                                               EdgeSnap.near(_draft, tile) !=
                                                   null
                                           ? '吸附就绪'
-                                          : node.selected
-                                              ? '当前控制'
-                                              : '已连接'),
+                                          : node.controlling
+                                              ? '● 当前控制'
+                                              : node.selected
+                                                  ? '已选中 · 键鼠在服务端'
+                                                  : '已连接'),
                                   if (widget.onClose != null)
                                     Positioned(
                                         top: 2,
