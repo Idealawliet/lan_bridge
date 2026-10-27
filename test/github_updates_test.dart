@@ -294,6 +294,20 @@ void main() {
     expect(launches, isEmpty);
   });
 
+  test('repeated downloads do not replace a previous installer', () async {
+    serveRelease();
+    final updates = updater();
+    addTearDown(updates.dispose);
+    await updates.check();
+    await updates.download();
+    final previous = updates.downloadedFile!;
+    expect(await previous.exists(), isTrue);
+    await updates.download();
+    expect(updates.downloadedFile!.path, isNot(previous.path));
+    expect(await previous.readAsBytes(), [1, 2, 3]);
+    expect(await updates.downloadedFile!.readAsBytes(), [1, 2, 3]);
+  });
+
   test('network errors and rate limits allow retry without losing the UI',
       () async {
     final updates = updater();

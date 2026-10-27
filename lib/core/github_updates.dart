@@ -352,7 +352,9 @@ class GitHubUpdates extends ChangeNotifier {
     final transport = _transportFactory();
     _transport = transport;
     File? partial;
+    Directory? attemptDirectory;
     RandomAccessFile? sink;
+    var stage = '获取校验文件';
     status = '正在下载 ${release.tag}…';
     _notify();
     try {
@@ -365,11 +367,15 @@ class GitHubUpdates extends ChangeNotifier {
         throw const FormatException('校验文件格式或文件名不正确');
       }
       final expectedHash = match[1]!.toLowerCase();
+      stage = '准备本地文件';
       final directory = await _directory();
       await directory.create(recursive: true);
-      final destination = File(p.join(directory.path, release.installer.name));
+      attemptDirectory = await directory.createTemp('download-');
+      final destination =
+          File(p.join(attemptDirectory.path, release.installer.name));
       partial = File('${destination.path}.part');
       sink = await partial.open(mode: FileMode.write);
+      stage = '下载安装包';
       final response = await transport.get(release.installer.url);
       _checkStatus(response.status);
       final digest = _DigestSink();
@@ -390,6 +396,7 @@ class GitHubUpdates extends ChangeNotifier {
         }
       }
       hash.close();
+      stage = '校验安装包';
       await sink.close();
       sink = null;
       if (_disposed || generation != _generation) throw StateError('已取消');
@@ -397,7 +404,7 @@ class GitHubUpdates extends ChangeNotifier {
           digest.value?.toString() != expectedHash) {
         throw const FormatException('安装包校验失败，请重新下载');
       }
-      if (await destination.exists()) await destination.delete();
+      stage = '保存已校验的安装包';
       final completed = await partial.rename(destination.path);
       if (_disposed || generation != _generation) {
         await completed.delete();
@@ -406,12 +413,26 @@ class GitHubUpdates extends ChangeNotifier {
       downloadedFile = completed;
       _downloadedHash = expectedHash;
       status = '下载完成，SHA-256 校验通过，可选择安装';
-    } catch (_) {
-      status = generation != _generation ? '已取消下载' : '下载或 SHA-256 校验失败，请重试';
+    } catch (error) {
+      final detail = switch (error) {
+        FormatException e => e.message,
+        HttpException e => e.message,
+        FileSystemException e => e.osError?.message ?? e.message,
+        SocketException _ => '无法连接服务器，请检查网络',
+        TimeoutException _ => '连接超时，请稍后重试',
+        StateError e => e.message.toString(),
+        _ => '发生未知错误，请稍后重试',
+      };
+      status = generation != _generation ? '已取消下载' : '$stage失败：$detail';
     } finally {
       try {
         await sink?.close();
         if (partial != null && await partial.exists()) await partial.delete();
+        if (downloadedFile == null &&
+            attemptDirectory != null &&
+            await attemptDirectory.exists()) {
+          await attemptDirectory.delete(recursive: true);
+        }
       } on FileSystemException {
         // A failed or cancelled partial file is never exposed as installable.
       }
