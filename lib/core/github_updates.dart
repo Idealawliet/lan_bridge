@@ -151,6 +151,7 @@ class GitHubUpdates extends ChangeNotifier {
       _disposed = false;
   String status = '从 GitHub 检查最新发行版（含预览版）';
   AppRelease? available;
+  String? skippedTag;
   List<AppRelease> versions = [];
 
   void selectVersion(String tag) {
@@ -185,15 +186,30 @@ class GitHubUpdates extends ChangeNotifier {
     try {
       final settings = await _settings.load();
       autoCheck = settings['autoCheck'] != false;
+      skippedTag = settings['skippedTag'] is String
+          ? settings['skippedTag'] as String
+          : null;
     } catch (_) {/* A broken preference file must not prevent manual checks. */}
+    _notify();
     if (!_disposed && autoCheck) await check();
   }
 
   Future<void> setAutoCheck(bool value) async {
     autoCheck = value;
     _notify();
+    await _savePreferences();
+  }
+
+  Future<void> skipVersion(String? tag) async {
+    skippedTag = tag;
+    _notify();
+    await _savePreferences();
+  }
+
+  Future<void> _savePreferences() async {
+    final preferences = {'autoCheck': autoCheck, 'skippedTag': skippedTag};
     _settingsQueue = _settingsQueue
-        .then((_) => _settings.save({'autoCheck': value}))
+        .then((_) => _settings.save(preferences))
         .catchError((Object _) {
       status = '无法保存自动检查偏好';
       _notify();

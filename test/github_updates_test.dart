@@ -259,6 +259,25 @@ void main() {
     expect(restarted.available, isNotNull);
   });
 
+  test('skipped version and auto check preferences survive independently',
+      () async {
+    final updates = updater();
+    addTearDown(updates.dispose);
+    await updates.setAutoCheck(false);
+    await updates.skipVersion('v1.2.3');
+    final restarted = updater();
+    addTearDown(restarted.dispose);
+    await restarted.initialize();
+    expect(restarted.autoCheck, isFalse);
+    expect(restarted.skippedTag, 'v1.2.3');
+    await restarted.skipVersion(null);
+    final restored = updater();
+    addTearDown(restored.dispose);
+    await restored.initialize();
+    expect(restored.skippedTag, isNull);
+    expect(restored.autoCheck, isFalse);
+  });
+
   test('bad checksums and truncated downloads never become installable',
       () async {
     serveRelease(checksum: '0' * 64);
