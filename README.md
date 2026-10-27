@@ -2,6 +2,9 @@
 
 在局域网内使用同一副键盘和鼠标控制多台 Windows / macOS 电脑。
 
+> **版权与许可：Copyright © 2026 Idealawliet。禁止未经书面授权的商业使用。**
+> 本项目采用[非商业使用许可](LICENSE)，允许遵守许可条件的非商业学习、研究、修改与分发；企业内部生产、办公、商业集成、销售及收费服务等用途须先取得书面授权。第三方依赖遵循各自许可证。本项目为源码可见项目，不采用 OSI 开源许可证。
+
 ## 下载与安装
 
 从 [GitHub Releases](https://github.com/Idealawliet/lan_bridge/releases) 下载 Windows EXE 安装器或 macOS DMG，也可选择便携 ZIP。发行包附有 SHA-256 文件，当前为未签名预览版。macOS 需要授予辅助功能、输入监控与本地网络权限。
@@ -47,3 +50,7 @@
 Windows 使用 `scripts/build-windows.ps1`（需要 Visual Studio C++ 和 Inno Setup 6）；macOS 使用 `scripts/build-macos.sh`（需要 Xcode 和 CocoaPods）。推送与 pubspec 对应的版本标签后，GitHub Actions 自动验证、打包并发布安装包。
 
 原生桥接位于 `packages/lan_input/`，核心逻辑位于 `lib/core/`，共享功能位于 `lib/sharing/`。实机验收参考 [检查清单](docs/manual-test.md)。
+
+## 商业授权
+
+商业使用请通过[项目 Issues](https://github.com/Idealawliet/lan_bridge/issues) 联系版权所有者，说明使用主体、用途、部署范围和分发方式，并在取得书面授权后使用。仓库公开、下载或 Fork 不代表获得商用授权。完整条款见 [LICENSE](LICENSE)。
