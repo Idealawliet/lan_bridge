@@ -12,6 +12,59 @@ import 'package:lan_bridge/core/screen_layout.dart';
 import 'package:lan_input/lan_input.dart';
 
 void main() {
+  for (final preparationFails in [true, false]) {
+    test(
+        'file drag failure restores capture and prepares before disabling edge: $preparationFails',
+        () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      final input = _FakeInput(1920, 1080), other = _FakeInput(1920, 1080);
+      final calls = <String>[];
+      const channel = MethodChannel('lan_input/methods');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'clipboardRevision') return 0;
+        if (call.method == 'clipboardHasFiles') return false;
+        if (call.method == 'prepareFileDrag') {
+          calls.add('prepare');
+          input.remote = true;
+          if (preparationFails) throw PlatformException(code: 'input_busy');
+        }
+        if (call.method == 'configureFileEdge') calls.add('edge');
+        return null;
+      });
+      final target = BridgeController(input: other, port: 0);
+      await target.setRole(BridgeRole.target);
+      await target.listen();
+      final source = BridgeController(input: input, port: target.port);
+      addTearDown(() async {
+        await source.disconnect();
+        await target.disconnect();
+        source.dispose();
+        target.dispose();
+        await input.close();
+        await other.close();
+        messenger.setMockMethodCallHandler(channel, null);
+      });
+      await source.connect('127.0.0.1', target.pairingKey);
+      await _until(() => target.connected);
+      calls.clear();
+      input.emit({
+        'type': 'fileDrag',
+        'paths': ['/nonexistent/drag-test-file'],
+        'x': 1919.0,
+        'y': 500.0
+      });
+      await _until(() => source.error?.contains('跨屏拖放失败') ?? false);
+      expect(calls.first, 'prepare');
+      expect(input.remote, isFalse);
+      expect(source.remoteActive, isFalse);
+      expect(source.sharingBusy, isFalse);
+      expect(input.releases, greaterThan(0));
+      expect(source.connected, isTrue);
+    });
+  }
+
   for (final peerVersion in ['0.0.1', null]) {
     test(
         'refuses mismatched or missing software version $peerVersion before control',

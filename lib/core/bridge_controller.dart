@@ -1012,28 +1012,33 @@ class BridgeController extends ChangeNotifier {
       await _configureEdge();
       return;
     }
-    await _input.configureFileEdge(false, false);
-    if (role == BridgeRole.source) {
-      _heldButtons.add(1);
-      await _input.prepareFileDrag();
-      await _setRemoteActive(true);
-      final entry = arrangement.point(_remote!, fraction - screenOffset);
-      _remoteX = entry.x;
-      _remoteY = entry.y;
-    } else {
-      await _peer?.send({'type': 'drag_reverse'});
-      await _input.cancelLocalDrag();
-      await _input.releaseAll();
-      await _setRemoteActive(false);
-    }
     try {
+      if (role == BridgeRole.source) {
+        _heldButtons.add(1);
+        await _input.prepareFileDrag();
+        await _input.configureFileEdge(false, false);
+        await _setRemoteActive(true);
+        final entry = arrangement.point(_remote!, fraction - screenOffset);
+        _remoteX = entry.x;
+        _remoteY = entry.y;
+      } else {
+        await _input.configureFileEdge(false, false);
+        await _peer?.send({'type': 'drag_reverse'});
+        await _input.cancelLocalDrag();
+        await _input.releaseAll();
+        await _setRemoteActive(false);
+      }
       if (epoch != _epoch) return;
       await transfer.sendPaths(paths,
           drag: true,
           y: fraction +
               (role == BridgeRole.source ? -screenOffset : screenOffset));
-    } catch (_) {
-      if (epoch == _epoch) await _cancelDrag();
+    } catch (e) {
+      if (epoch == _epoch) {
+        await _cancelDrag();
+        error = '跨屏拖放失败：$e';
+        _notify();
+      }
     }
   }
 
