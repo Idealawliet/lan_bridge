@@ -142,6 +142,7 @@ class BridgeController extends ChangeNotifier {
   int _probeSequence = 0;
   int? _probeId, _probeStarted;
   double? latencyMs;
+  DateTime? connectedAt;
   double jitterMs = 0;
   int? get signalBars => !connected || latencyMs == null
       ? null
@@ -633,6 +634,7 @@ class BridgeController extends ChangeNotifier {
       await handshake;
       if (epoch != _epoch) return;
       phase = ConnectionPhase.connected;
+      connectedAt = DateTime.now();
       if (role == BridgeRole.target) await _input.setCursorVisible(false);
       if (enableSharing) {
         await _configureEdge();
@@ -1160,6 +1162,7 @@ class BridgeController extends ChangeNotifier {
     await fileTransfer?.close();
     await clipboardSync?.settled;
     phase = ConnectionPhase.idle;
+    connectedAt = null;
     _notify();
   }
 

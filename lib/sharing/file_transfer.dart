@@ -45,6 +45,11 @@ class FileTransfer extends ChangeNotifier {
   String status = '将文件或文件夹拖入，发送到另一台电脑';
   String? lastDirectory;
   int sentBytes = 0, receivedBytes = 0, sendTotal = 0, receiveTotal = 0;
+  final Stopwatch _sendClock = Stopwatch(), _receiveClock = Stopwatch();
+  double get sendBytesPerSecond => _rate(sentBytes, _sendClock);
+  double get receiveBytesPerSecond => _rate(receivedBytes, _receiveClock);
+  static double _rate(int bytes, Stopwatch clock) =>
+      clock.elapsedMilliseconds == 0 ? 0 : bytes * 1000 / clock.elapsedMilliseconds;
   bool sending = false, receiving = false, _closed = false;
   String? _outId;
   Completer<Map<String, dynamic>>? _reply;
@@ -75,6 +80,7 @@ class FileTransfer extends ChangeNotifier {
     if (_closed || sending) throw StateError('已有发送任务');
     sending = true;
     sentBytes = 0;
+    _sendClock.reset();
     sendTotal = 0;
     final id = List.generate(
             16,
@@ -138,6 +144,7 @@ class FileTransfer extends ChangeNotifier {
             'y': y
           },
           timeout: const Duration(minutes: 2));
+      _sendClock.start();
       var seq = 0;
       for (final entry in entries) {
         await _exchange('entry', id, {
@@ -185,6 +192,7 @@ class FileTransfer extends ChangeNotifier {
         _reply = null;
       }
       sending = false;
+      _sendClock.stop();
       _notify();
     }
   }
@@ -362,6 +370,7 @@ class FileTransfer extends ChangeNotifier {
           _staging = null;
           offer = null;
           receiving = false;
+          _receiveClock.stop();
           lastDirectory = destination;
           status = '接收完成：$destination';
           _notify();
@@ -395,6 +404,9 @@ class FileTransfer extends ChangeNotifier {
       _staging = stage;
       receiving = true;
       receivedBytes = 0;
+      _receiveClock
+        ..reset()
+        ..start();
       receiveTotal = incoming.bytes;
       _sequence = 0;
       _entryCount = 0;
@@ -458,6 +470,7 @@ class FileTransfer extends ChangeNotifier {
     _staging = null;
     offer = null;
     receiving = false;
+    _receiveClock.stop();
     if (stage != null && await stage.exists()) {
       await stage.delete(recursive: true);
     }

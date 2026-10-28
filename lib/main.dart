@@ -11,6 +11,7 @@ import 'core/lan_workspace.dart';
 import 'core/desktop_lifecycle.dart';
 import 'core/lan_discovery.dart';
 import 'core/github_updates.dart';
+import 'core/connection_diagnostics.dart';
 import 'screen_workspace.dart';
 
 const _ink = Color(0xFF202434);
@@ -262,7 +263,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                 _notice(
                   Icons.error_outline,
                   '连接异常',
-                  _bridge.error!,
+                  '${_bridge.error!}\n\n${connectionAdvice(_bridge.error!)}',
                   warning: true,
                 ),
               if (_bridge.files != null) ...[
@@ -520,6 +521,16 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
               ),
             ],
           ),
+          if (_bridge.connected && _bridge.connectedAt != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                '${workspace.serving ? '当前设备 ${workspace.active?.device.name ?? '客户端'} · ' : ''}'
+                '连接时长 ${DateTime.now().difference(_bridge.connectedAt!).inMinutes} 分钟 · '
+                '${_bridge.latencyMs == null ? '延迟测量中' : '延迟 ${_bridge.latencyMs!.round()} ms · 抖动 ${_bridge.jitterMs.round()} ms'}',
+                style: const TextStyle(color: _muted, fontSize: 12),
+              ),
+            ),
           if (!workspace.serving && _localBridge.connected)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -576,7 +587,10 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
           ),
         if (workspace.busy) const LinearProgressIndicator(),
         if (workspace.error != null)
-          Text(workspace.error!, style: const TextStyle(color: Colors.red)),
+          Text(
+            '${workspace.error!}\n${connectionAdvice(workspace.error!)}',
+            style: const TextStyle(color: Colors.red),
+          ),
       ],
     );
   }
@@ -1363,7 +1377,9 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                   ? null
                   : files.sentBytes / files.sendTotal,
             ),
-            Text('发送 ${bytes(files.sentBytes)} / ${bytes(files.sendTotal)}'),
+            Text(
+              '发送 ${bytes(files.sentBytes)} / ${bytes(files.sendTotal)} · 平均 ${bytes(files.sendBytesPerSecond.round())}/秒',
+            ),
           ],
           if (files.receiving) ...[
             const SizedBox(height: 12),
@@ -1373,7 +1389,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
                   : files.receivedBytes / files.receiveTotal,
             ),
             Text(
-              '接收 ${bytes(files.receivedBytes)} / ${bytes(files.receiveTotal)}',
+              '接收 ${bytes(files.receivedBytes)} / ${bytes(files.receiveTotal)} · 平均 ${bytes(files.receiveBytesPerSecond.round())}/秒',
             ),
           ],
           const SizedBox(height: 10),
