@@ -3,6 +3,29 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lan_bridge/core/input_event_queue.dart';
 
 void main() {
+  test('opposite mouse movements remain separate at screen boundaries', () async {
+    final gate = Completer<void>();
+    final events = <Map<String, dynamic>>[];
+    final queue = InputEventQueue<int>(
+      consume: (event, _) async {
+        if (events.isEmpty) await gate.future;
+        events.add(event);
+      },
+      onError: (error, _, __) => fail('$error'),
+    );
+    queue.add({'type': 'key', 'usage': 4, 'down': true}, 0);
+    queue.add({'type': 'move', 'dx': 12, 'dy': 0}, 0);
+    queue.add({'type': 'move', 'dx': -12, 'dy': 0}, 0);
+    queue.add({'type': 'move', 'dx': -3, 'dy': 5}, 0);
+    queue.add({'type': 'move', 'dx': -2, 'dy': -5}, 0);
+    gate.complete();
+    await queue.idle;
+    expect(events.map((e) => e['type']), ['key', 'move', 'move', 'move']);
+    expect(events[1]['dx'], 12);
+    expect(events[2]['dx'], -15);
+    expect(events[2]['dy'], 5);
+    expect(events[3]['dy'], -5);
+  });
   test('edge dwell expiration remains ordered between mouse samples', () async {
     final gate = Completer<void>();
     final events = <Map<String, dynamic>>[];

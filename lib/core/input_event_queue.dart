@@ -59,7 +59,11 @@ class InputEventQueue<T> {
           dx.isFinite &&
           dy.isFinite &&
           oldDx.isFinite &&
-          oldDy.isFinite) {
+          oldDy.isFinite &&
+          // Reversals must retain their path: crossing a screen seam or
+          // clamping at an edge depends on intermediate positions.
+          !(dx > 0 && oldDx < 0 || dx < 0 && oldDx > 0) &&
+          !(dy > 0 && oldDy < 0 || dy < 0 && oldDy > 0)) {
         _items.last.event = {...event, 'dx': oldDx + dx, 'dy': oldDy + dy};
         merged++;
         return;
