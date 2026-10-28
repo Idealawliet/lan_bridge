@@ -515,7 +515,7 @@ class BridgeController extends ChangeNotifier {
                 await _receiveDragFiles(paths, y);
               } catch (e) {
                 error = '无法启动系统拖放：$e';
-                if (epoch == _epoch) await _cancelDrag();
+                if (epoch == _epoch) await _cancelDrag(reason: e.toString());
               }
             })
           ..addListener(_notify);
@@ -958,13 +958,22 @@ class BridgeController extends ChangeNotifier {
       return;
     }
     if (message['type'] == 'drag_cancel' && enableSharing) {
-      await _cancelDrag(notifyPeer: false);
+      final reason = message['reason'];
+      if (reason != null && (reason is! String || reason.length > 256)) {
+        throw const FormatException('无效拖放失败原因');
+      }
+      await _cancelDrag(notifyPeer: false, reason: reason as String?);
       return;
     }
     if (message['type'] == 'drag_finished' && enableSharing) {
+      if (message['cancelled'] is! bool) throw const FormatException('无效拖放结果');
+      final cancelled = message['cancelled'] == true;
+      files?.dragFinished(cancelled: cancelled, outgoing: true);
+      dragStatus = cancelled ? '对端拖放已取消，已接收的副本保留在下载目录' : '对端系统拖放已完成';
       _dragWaiting = false;
       _dragTimeout?.cancel();
       await _configureEdge();
+      _notify();
       return;
     }
     if (role != BridgeRole.target) throw const FormatException('收到不允许的控制消息');
@@ -1069,7 +1078,9 @@ class BridgeController extends ChangeNotifier {
       _dragWaiting = false;
       await _input.releaseAll();
       await _configureEdge();
-      await _peer?.send({'type': 'drag_finished'});
+      final cancelled = event['cancelled'] == true;
+      files?.dragFinished(cancelled: cancelled);
+      await _peer?.send({'type': 'drag_finished', 'cancelled': cancelled});
       dragStatus =
           event['cancelled'] == true ? '系统拖放已取消，已收到的副本保留在下载目录' : '系统拖放完成';
       _notify();
@@ -1149,7 +1160,9 @@ class BridgeController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> _cancelDrag({bool notifyPeer = true}) async {
+  Future<void> _cancelDrag({bool notifyPeer = true, String? reason}) async {
+    files?.dragFinished(cancelled: true, reason: reason);
+    files?.dragFinished(cancelled: true, outgoing: true, reason: reason);
     _dragTimeout?.cancel();
     _dragWaiting = false;
     _receivingNativeDrag = false;
@@ -1162,7 +1175,13 @@ class BridgeController extends ChangeNotifier {
       await files?.cancel();
       if (connected) {
         await _configureEdge();
-        if (notifyPeer) await _peer?.send({'type': 'drag_cancel'});
+        if (notifyPeer) {
+          await _peer?.send({
+            'type': 'drag_cancel',
+            if (reason != null)
+              'reason': reason.length > 256 ? reason.substring(0, 256) : reason,
+          });
+        }
       }
     }
     dragStatus = '跨屏拖放已取消';

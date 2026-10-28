@@ -1401,6 +1401,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
           ],
           if (files.sending) ...[
             const SizedBox(height: 12),
+            Text(files.sendingName ?? '正在发送'),
             LinearProgressIndicator(
               value: files.sendTotal == 0
                   ? null
@@ -1412,6 +1413,7 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
           ],
           if (files.receiving) ...[
             const SizedBox(height: 12),
+            Text(files.offer?.name ?? '正在接收'),
             LinearProgressIndicator(
               value: files.receiveTotal == 0
                   ? null
@@ -1426,6 +1428,17 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
             files.status,
             style: const TextStyle(color: _muted, fontSize: 12),
           ),
+          if (files.history.isNotEmpty)
+            ExpansionTile(
+              title: const Text('本次连接的传输记录'),
+              children: [
+                for (final record in files.history)
+                  ListTile(
+                    title: Text('${record.outgoing ? '发送' : '接收'} · ${record.name} · ${record.bytes == null ? '大小未知' : bytes(record.bytes!)}'),
+                    subtitle: Text('${record.drag ? '跨屏拖放 · ' : ''}${record.result}'),
+                  ),
+              ],
+            ),
         ],
       ),
     );

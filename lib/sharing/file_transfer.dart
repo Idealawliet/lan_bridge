@@ -11,6 +11,16 @@ const maxTransferEntries = 10000;
 const maxTransferBytes = 100 * 1024 * 1024 * 1024;
 typedef SendFrame = Future<void> Function(Map<String, dynamic> message);
 
+class TransferRecord {
+  TransferRecord(this.id, this.name, this.bytes, this.outgoing, this.drag,
+      this.result, this.time);
+  final String id, name;
+  final int? bytes;
+  final bool outgoing, drag;
+  String result;
+  final DateTime time;
+}
+
 class TransferOffer {
   TransferOffer(this.id, this.name, this.count, this.bytes, this.drag, this.y,
       {this.clipboard = false});
@@ -44,6 +54,38 @@ class FileTransfer extends ChangeNotifier {
   TransferOffer? offer;
   String status = '将文件或文件夹拖入，发送到另一台电脑';
   String? lastDirectory;
+  String? sendingName;
+  final List<TransferRecord> history = [];
+  String? _outgoingDragId, _incomingDragId;
+  void _record(String id, String name, int? bytes, bool outgoing, bool drag,
+      String result) {
+    final existing = history.where((record) => record.id == id).firstOrNull;
+    if (existing != null) {
+      existing.result = result;
+    } else {
+      history.insert(0, TransferRecord(id, name, bytes, outgoing, drag, result, DateTime.now()));
+      if (history.length > 50) history.removeLast();
+    }
+    _notify();
+  }
+
+  void dragFinished({required bool cancelled, bool outgoing = false, String? reason}) {
+    final id = outgoing ? _outgoingDragId : _incomingDragId;
+    if (id == null) return;
+    for (final record in history) {
+      if (record.id == id) {
+        record.result = reason != null ? '拖放失败：$reason；已接收的副本保留在下载目录'
+            : cancelled ? '拖放已取消，已接收的副本保留在下载目录' : '系统拖放已完成';
+        break;
+      }
+    }
+    if (outgoing) {
+      _outgoingDragId = null;
+    } else {
+      _incomingDragId = null;
+    }
+    _notify();
+  }
   int sentBytes = 0, receivedBytes = 0, sendTotal = 0, receiveTotal = 0;
   final Stopwatch _sendClock = Stopwatch(), _receiveClock = Stopwatch();
   double get sendBytesPerSecond => _rate(sentBytes, _sendClock);
@@ -79,6 +121,8 @@ class FileTransfer extends ChangeNotifier {
       {bool drag = false, bool clipboard = false, double y = .5}) async {
     if (_closed || sending) throw StateError('已有发送任务');
     sending = true;
+    final names = paths.map((path) => p.basename(p.normalize(path))).join('、');
+    sendingName = names.length > 1024 ? '${names.substring(0, 1020)}…' : names;
     sentBytes = 0;
     _sendClock.reset();
     sendTotal = 0;
@@ -88,6 +132,7 @@ class FileTransfer extends ChangeNotifier {
                 Random.secure().nextInt(256).toRadixString(16).padLeft(2, '0'))
         .join();
     _outId = id;
+    var manifestReady = false;
     status = '正在读取文件清单';
     _notify();
     try {
@@ -124,6 +169,7 @@ class FileTransfer extends ChangeNotifier {
         await scan(p.normalize(path), p.basename(p.normalize(path)));
       }
       if (entries.isEmpty) throw StateError('没有可发送的文件');
+      manifestReady = true;
       status = drag
           ? '跨屏拖放：正在传输，请保持按住鼠标'
           : clipboard
@@ -134,9 +180,7 @@ class FileTransfer extends ChangeNotifier {
           'offer',
           id,
           {
-            'name': paths.length == 1
-                ? p.basename(paths.first)
-                : '${paths.length} 个项目',
+            'name': sendingName,
             'count': entries.length,
             'bytes': sendTotal,
             'drag': drag,
@@ -178,10 +222,20 @@ class FileTransfer extends ChangeNotifier {
         await _exchange('file_end', id,
             {'seq': seq++, 'hash': hashResult.value.toString()});
       }
+      if (drag) {
+        _outgoingDragId = id;
+        _record(id, sendingName!, sendTotal, true, true, '正在完成文件传输');
+      }
       await _exchange('finish', id, {'seq': seq});
       status = drag ? '文件已就绪，继续拖到目标文件夹并松开' : '发送完成';
+      if (!drag) _record(id, sendingName!, sendTotal, true, false, status);
+      if (drag && _outgoingDragId == id) {
+        _record(id, sendingName!, sendTotal, true, true, '文件已传送，等待系统拖放结果');
+      }
     } catch (e) {
       status = '发送未完成：$e';
+      _record(id, sendingName!, manifestReady ? sendTotal : null, true, drag, status);
+      if (_outgoingDragId == id) _outgoingDragId = null;
       try {
         await _emit('cancel', id);
       } catch (_) {}
@@ -208,7 +262,9 @@ class FileTransfer extends ChangeNotifier {
     await _emit(op, id, fields);
     final message = await future;
     if (message['op'] != 'ack' || message['seq'] != (fields['seq'] ?? -1)) {
-      throw StateError('接收方拒绝或取消传输');
+      final reason = message['reason'];
+      throw StateError(reason is String && reason.isNotEmpty && reason.length <= 256
+          ? '接收方：$reason' : '接收方拒绝或取消传输');
     }
     return message;
   }
@@ -267,8 +323,10 @@ class FileTransfer extends ChangeNotifier {
     }
     if (id != offer?.id) return; // Late packets from cancelled transfers.
     if (op == 'cancel') {
+      final cancelled = offer!;
       await _discard();
       status = '对方已取消传输';
+      _record(id, cancelled.name, cancelled.bytes, false, cancelled.drag, status);
       _notify();
       return;
     }
@@ -373,6 +431,9 @@ class FileTransfer extends ChangeNotifier {
           _receiveClock.stop();
           lastDirectory = destination;
           status = '接收完成：$destination';
+          _record(id, transfer.name, transfer.bytes, false, transfer.drag,
+              transfer.drag ? '文件已接收，等待系统拖放结果' : status);
+          if (transfer.drag) _incomingDragId = id;
           _notify();
           if (transfer.clipboard) await onClipboardReceived?.call(paths);
           await _emit('ack', id, {'seq': m['seq']});
@@ -383,10 +444,13 @@ class FileTransfer extends ChangeNotifier {
       }
       await _emit('ack', id, {'seq': m['seq']});
     } catch (e) {
+      final failed = offer;
       await _discard();
       status = '接收失败：$e';
+      if (failed != null) _record(id, failed.name, failed.bytes, false, failed.drag, status);
       _notify();
-      await _emit('reject', id);
+      final reason = e.toString();
+      await _emit('reject', id, {'reason': reason.length > 256 ? reason.substring(0, 256) : reason});
     }
   }
 
@@ -425,20 +489,28 @@ class FileTransfer extends ChangeNotifier {
   }
 
   Future<void> reject() async {
-    final id = offer?.id;
+    final rejected = offer;
+    final id = rejected?.id;
     await _discard();
-    if (id != null) await _emit('reject', id);
+    if (id != null) {
+      _record(id, rejected!.name, rejected.bytes, false, rejected.drag, '已拒绝接收');
+      await _emit('reject', id);
+    }
     status = '已拒绝接收';
     _notify();
   }
 
   Future<void> cancel() async {
     final out = _outId, incoming = offer?.id;
+    final cancelled = offer;
     _outId = null;
     if (_reply != null && !_reply!.isCompleted) {
       _reply!.complete({'op': 'cancel'});
     }
     await _discard();
+    if (incoming != null && cancelled != null) {
+      _record(incoming, cancelled.name, cancelled.bytes, false, cancelled.drag, '传输已取消');
+    }
     if (!_closed) {
       if (out != null) await _emit('cancel', out);
       if (incoming != null) await _emit('cancel', incoming);
