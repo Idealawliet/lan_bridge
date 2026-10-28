@@ -153,6 +153,9 @@ class RoutedInput extends LanInput {
   @override
   Future<void> startCapture() => router.start(id);
   @override
+  Future<void> configureSwitchShortcut(bool enabled) =>
+      router.native.configureSwitchShortcut(enabled);
+  @override
   Future<void> stopCapture() => router.stop(id);
   @override
   Future<void> setRemoteCapture(bool enabled) async {

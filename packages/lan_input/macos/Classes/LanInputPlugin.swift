@@ -23,6 +23,9 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     private var lastHeartbeat = ProcessInfo.processInfo.systemUptime
     private var watchdogTripped = false
     private var remote = false
+    private var switchShortcutEnabled = false
+    private var switchShortcutPending = false
+    private var switchShortcutKeyDown = false
     private var cursorHidden = false
     private var cursorVisible = true
     private var injectedKeys = Set<Int>()
@@ -150,6 +153,10 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
             _ = AXIsProcessTrustedWithOptions(options)
             _ = CGRequestListenEventAccess()
             result(nil)
+        case "configureSwitchShortcut":
+            guard let enabled = args["enabled"] as? Bool else { result(invalid("enabled must be a boolean")); return }
+            lock.lock(); switchShortcutEnabled = enabled; switchShortcutPending = false; switchShortcutKeyDown = false; lock.unlock()
+            result(nil)
         case "startCapture":
             if let error = startCapture() { result(error) } else { result(nil) }
         case "stopCapture":
@@ -267,6 +274,8 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
 
     private func stopCapture() {
         lock.lock()
+        switchShortcutPending = false
+        switchShortcutKeyDown = false
         cursorVisible = true
         setRemoteLocked(false)
         updateCursorLocked()
@@ -341,13 +350,20 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
             emit(["type": "emergency"])
             return nil
         }
+        if switchShortcutEnabled && type == .keyDown && keyCode == 111 && event.flags.contains(.maskControl) && event.flags.contains(.maskAlternate) {
+            switchShortcutPending = true
+            switchShortcutKeyDown = true
+            return nil
+        }
+        let swallowShortcut = switchShortcutPending && keyCode == 111 && (type == .keyDown || type == .keyUp)
+        if swallowShortcut && type == .keyUp { switchShortcutKeyDown = false }
         switch type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             emit(["type": "move", "captured": remote, "x": event.location.x, "y": event.location.y,
                   "dx": event.getDoubleValueField(.mouseEventDeltaX),
                   "dy": event.getDoubleValueField(.mouseEventDeltaY)])
         case .keyDown, .keyUp:
-            if remote, let usage = Self.usages[keyCode] {
+            if remote, !swallowShortcut, let usage = Self.usages[keyCode] {
                 emit(["type": "key", "usage": usage, "down": type == .keyDown])
             }
         case .flagsChanged:
@@ -379,6 +395,12 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
             }
         default: break
         }
+        if switchShortcutPending && !switchShortcutKeyDown &&
+            !event.flags.contains(.maskControl) && !event.flags.contains(.maskAlternate) {
+            switchShortcutPending = false
+            emit(["type": "switchShortcut"])
+        }
+        if swallowShortcut { return nil }
         return remote ? nil : Unmanaged.passUnretained(event)
     }
 

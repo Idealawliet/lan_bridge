@@ -245,6 +245,7 @@ class NativeBridge {
     mouse_hook_ = nullptr;
     ReleaseAll();
     physical_keys_.clear();
+    switch_shortcut_pending_ = false;
     physical_buttons_.clear();
     std::lock_guard<std::mutex> lock(event_mutex_);
     event_queue_.clear();
@@ -309,6 +310,10 @@ class NativeBridge {
   }
 
   void Heartbeat() { last_heartbeat_ = GetTickCount64(); }
+  void ConfigureSwitchShortcut(bool enabled) {
+    switch_shortcut_enabled_ = enabled;
+    switch_shortcut_pending_ = false;
+  }
   void ExternalEvent(Map event) { Emit(std::move(event)); }
 
   bool MovePointer(double x, double y) {
@@ -554,10 +559,25 @@ class NativeBridge {
       GetCursorPos(&self->last_mouse_);
       return 1;
     }
-    if (self->remote_) {
-      if (usage != 0) self->Emit(KeyEvent(usage, down));
+    if (self->switch_shortcut_enabled_ && down && usage == 0x45 && control && alt) {
+      self->switch_shortcut_pending_ = true;
       return 1;
     }
+    const bool swallow_shortcut = self->switch_shortcut_pending_ && usage == 0x45;
+    const bool switch_ready = self->switch_shortcut_pending_ && !down && keys.empty();
+    if (self->remote_) {
+      if (usage != 0 && !swallow_shortcut) self->Emit(KeyEvent(usage, down));
+      if (switch_ready) {
+        self->switch_shortcut_pending_ = false;
+        self->Emit({{Value("type"), Value("switchShortcut")}});
+      }
+      return 1;
+    }
+    if (switch_ready) {
+      self->switch_shortcut_pending_ = false;
+      self->Emit({{Value("type"), Value("switchShortcut")}});
+    }
+    if (swallow_shortcut) return 1;
     return CallNextHookEx(nullptr, code, message, data);
   }
 
@@ -632,6 +652,8 @@ class NativeBridge {
   HHOOK keyboard_hook_ = nullptr;
   HHOOK mouse_hook_ = nullptr;
   bool remote_ = false;
+  bool switch_shortcut_enabled_ = false;
+  bool switch_shortcut_pending_ = false;
   int cursor_hide_calls_ = 0;
   bool cursor_visible_ = true;
   ULONGLONG last_heartbeat_ = 0;
@@ -770,6 +792,13 @@ void LanInputPlugin::HandleMethodCall(
         std::wstring wide(n, L'\0'); MultiByteToWideChar(CP_UTF8, 0, path->data(), static_cast<int>(path->size()), wide.data(), n); paths.push_back(std::move(wide));
       }
       error = file_drag_->Begin(paths);
+    } else if (method == "configureSwitchShortcut") {
+      bool enabled = false;
+      if (!arguments || !Boolean(*arguments, "enabled", enabled)) {
+        result->Error("invalid_arguments", "enabled must be a boolean");
+        return;
+      }
+      bridge_->Invoke([this, enabled] { bridge_->ConfigureSwitchShortcut(enabled); });
     } else if (method == "startCapture") {
       error = bridge_->Invoke([this] { return bridge_->StartCapture(); });
     } else if (method == "stopCapture") {

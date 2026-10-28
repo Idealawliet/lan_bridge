@@ -32,6 +32,7 @@ class BridgeController extends ChangeNotifier {
       LoginStartup? startup,
       this.triggerRangeProvider,
       this.switchDelayProvider,
+      this.shortcutEnabledProvider,
       ClipboardAccess? clipboardAccess})
       : _input = input ?? LanInput(),
         _clipboardAccess = clipboardAccess,
@@ -43,6 +44,13 @@ class BridgeController extends ChangeNotifier {
   final String softwareVersion;
   final double Function()? triggerRangeProvider;
   final int Function()? switchDelayProvider;
+  final bool Function()? shortcutEnabledProvider;
+  bool switchShortcutEnabled = true;
+  void setSwitchShortcutEnabled(bool enabled) {
+    switchShortcutEnabled = enabled;
+    _saveSettings();
+    _notify();
+  }
   double edgeTriggerRange = 1;
   int switchDelayMs = 0;
   int get effectiveSwitchDelay => switchDelayProvider?.call() ?? switchDelayMs;
@@ -82,6 +90,7 @@ class BridgeController extends ChangeNotifier {
       'offset': screenOffset,
       'edgeTriggerRange': edgeTriggerRange,
       'switchDelayMs': switchDelayMs,
+      'switchShortcutEnabled': switchShortcutEnabled,
     };
     _settingsQueue =
         _settingsQueue.then((_) => _settings.save(data)).catchError((Object e) {
@@ -244,6 +253,7 @@ class BridgeController extends ChangeNotifier {
         }
         final delay = data['switchDelayMs'];
         if (delay is int) switchDelayMs = delay.clamp(0, 2000);
+        switchShortcutEnabled = data['switchShortcutEnabled'] != false;
         if (offset is num && offset.isFinite) {
           screenOffset = offset.toDouble().clamp(-0.9, 0.9);
         }
@@ -654,6 +664,8 @@ class BridgeController extends ChangeNotifier {
         if (!_inputEnabled) return;
         _nativeQueue.add(event, (epoch: epoch, revision: _inputRevision));
       }, onError: (Object e) => _fail('输入捕获失败：$e', epoch));
+      await _input.configureSwitchShortcut(role == BridgeRole.source &&
+          (shortcutEnabledProvider?.call() ?? switchShortcutEnabled));
       await _input.startCapture();
       if (epoch != _epoch) {
         await _input.stopCapture();
@@ -727,6 +739,20 @@ class BridgeController extends ChangeNotifier {
 
   Future<void> _onNative(Map<String, dynamic> event, int epoch) async {
     final local = _local!, remote = _remote!;
+    if (event['type'] == 'switchShortcut') {
+      _cancelDwell();
+      if (sharingBusy) return;
+      if (remoteActive) {
+        await returnToLocal();
+      } else {
+        try {
+          await beginControl();
+        } on PlatformException catch (e) {
+          if (e.code != 'input_busy') rethrow;
+        }
+      }
+      return;
+    }
     // Never interpret pre-capture absolute samples as remote relative motion,
     // or remote samples queued before a return as a new local crossing.
     if (event['type'] == 'move' &&

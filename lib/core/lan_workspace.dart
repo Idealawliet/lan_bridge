@@ -34,6 +34,12 @@ class LanWorkspace extends ChangeNotifier {
       _closed = false;
   String? error;
   ControlledComputer? get active => computers[router.focused];
+  Future<void> setSwitchShortcutEnabled(bool enabled) async {
+    if (serving && computers.values.any((m) => m.controller.connected)) {
+      await router.native.configureSwitchShortcut(enabled);
+    }
+    local.setSwitchShortcutEnabled(enabled);
+  }
   void _notify() {
     if (!_closed) notifyListeners();
   }
@@ -194,6 +200,7 @@ class LanWorkspace extends ChangeNotifier {
         input: router.channel(device.id),
         triggerRangeProvider: () => local.edgeTriggerRange,
         switchDelayProvider: () => local.switchDelayMs,
+        shortcutEnabledProvider: () => local.switchShortcutEnabled,
         port: device.port,
         enableSharing: enableSharing);
     controller.setArrangement(side, offset);

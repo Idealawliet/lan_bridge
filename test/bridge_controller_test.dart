@@ -12,6 +12,17 @@ import 'package:lan_bridge/core/screen_layout.dart';
 import 'package:lan_input/lan_input.dart';
 
 void main() {
+  test('switch shortcut toggles the connected screen without forwarding the shortcut', () async {
+    final pair = await _Controllers.open();
+    addTearDown(pair.close);
+    pair.sourceInput.emit({'type': 'switchShortcut'});
+    await _until(() => pair.target.remoteActive);
+    expect(pair.source.remoteActive, isTrue);
+    pair.sourceInput.emit({'type': 'switchShortcut'});
+    await _until(() => !pair.target.remoteActive);
+    expect(pair.source.remoteActive, isFalse);
+    expect(pair.targetInput.injected.where((e) => e['type'] == 'key'), isEmpty);
+  });
   test('dwell requires remaining at the edge and cancels when leaving', () async {
     final pair = await _Controllers.open();
     addTearDown(pair.close);
@@ -673,6 +684,8 @@ class _Controllers {
 }
 
 class _FakeInput extends LanInput {
+  @override
+  Future<void> configureSwitchShortcut(bool enabled) async {}
   bool cursorVisible = true;
   @override
   Future<void> setCursorVisible(bool visible) async {

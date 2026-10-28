@@ -49,6 +49,8 @@ class LanInput {
   Future<void> requestPermissions() =>
       _methods.invokeMethod('requestPermissions');
   Future<void> startCapture() => _methods.invokeMethod('startCapture');
+  Future<void> configureSwitchShortcut(bool enabled) =>
+      _methods.invokeMethod('configureSwitchShortcut', {'enabled': enabled});
   Future<void> stopCapture() => _methods.invokeMethod('stopCapture');
   Future<void> setRemoteCapture(bool enabled) =>
       _methods.invokeMethod('setRemoteCapture', {'enabled': enabled});

@@ -12,6 +12,8 @@ class FakeDiscovery extends LanDiscovery {
 }
 
 class FakeNative extends LanInput {
+  @override
+  Future<void> configureSwitchShortcut(bool enabled) async {}
   bool cursorVisible = true;
   @override
   Future<void> setCursorVisible(bool visible) async {

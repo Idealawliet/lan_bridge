@@ -1112,6 +1112,14 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
           ),
           const Text('以两个屏幕重叠边缘的中心为准，仅影响从主机进入客户端。',
               style: TextStyle(color: _muted, fontSize: 12)),
+          const Text('切换当前设备：Ctrl / Control + Alt / Option + F12，松开按键后切换。',
+              style: TextStyle(color: _muted, fontSize: 12)),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('启用屏幕切换快捷键'),
+            value: local.switchShortcutEnabled,
+            onChanged: (value) => unawaited(_run(() => _workspace.setSwitchShortcutEnabled(value))),
+          ),
           Text('屏幕边缘停留延迟：${local.switchDelayMs} 毫秒'),
           Slider(
             value: local.switchDelayMs.toDouble(),
