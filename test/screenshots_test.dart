@@ -10,6 +10,7 @@ import 'package:lan_bridge/core/bridge_controller.dart';
 import 'package:lan_bridge/core/lan_workspace.dart';
 import 'package:lan_bridge/core/lan_discovery.dart';
 import 'package:lan_bridge/core/github_updates.dart';
+import 'package:lan_bridge/sharing/file_transfer.dart';
 
 class PreviewController extends BridgeController {
   @override
@@ -32,13 +33,13 @@ class PreviewUpdates extends GitHubUpdates {
   @override
   Future<void> initialize() async {
     versions = [
-      for (final version in ['0.11.0', '0.10.0', '0.9.1'])
+      for (final version in ['0.11.7', '0.11.6', '0.11.5'])
         GitHubUpdates.selectRelease([
           {
             'tag_name': 'v$version',
             'draft': false,
             'prerelease': true,
-            'body': '支持相同版本配对、历史版本切换与更及时的鼠标输入。',
+            'body': '传输界面显示文件名称、大小、进度与拖放结果。',
             'assets': [
               for (final name in [
                 'lan-bridge-windows-x64-$version-setup-unsigned.exe',
@@ -121,9 +122,29 @@ void main() {
     workspace.router.focused = 'demo';
     await workspace.startServer();
     await save('server');
+    final transfers = FileTransfer(
+        send: (_) async {}, receiveDirectory: () async => Directory.systemTemp);
+    controller.files = transfers;
+    await transfers.receive({
+      'op': 'offer',
+      'id': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'name': '项目资料.zip',
+      'count': 1,
+      'bytes': 5242880,
+      'drag': false,
+      'y': .5,
+    });
+    workspace.local.setEdgeTriggerRange(1);
+    await tester.pump();
+    await tester.ensureVisible(find.text('对方发送：项目资料.zip · 5.0 MiB · 1 个条目'));
+    await save('sharing');
+    await transfers.close();
+    controller.files = null;
     await tester.ensureVisible(find.byTooltip('设置'));
     await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('屏幕边缘触发范围：100%'));
+    await save('settings');
     await tester.ensureVisible(find.text('版本管理 · 升级 / 降级 / 重装'));
     await tester.pumpAndSettle();
     await save('versions');
