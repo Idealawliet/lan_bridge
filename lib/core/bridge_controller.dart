@@ -30,6 +30,8 @@ class BridgeController extends ChangeNotifier {
       this.softwareVersion = appVersion,
       DesktopSettings? settings,
       LoginStartup? startup,
+      this.triggerRangeProvider,
+      this.switchDelayProvider,
       ClipboardAccess? clipboardAccess})
       : _input = input ?? LanInput(),
         _clipboardAccess = clipboardAccess,
@@ -39,6 +41,25 @@ class BridgeController extends ChangeNotifier {
             settings != null || Platform.isWindows || Platform.isMacOS,
         _startup = startup ?? LoginStartup();
   final String softwareVersion;
+  final double Function()? triggerRangeProvider;
+  final int Function()? switchDelayProvider;
+  double edgeTriggerRange = 1;
+  int switchDelayMs = 0;
+  int get effectiveSwitchDelay => switchDelayProvider?.call() ?? switchDelayMs;
+  void setSwitchDelay(int value) {
+    switchDelayMs = value.clamp(0, 2000);
+    _cancelDwell();
+    _saveSettings();
+    _notify();
+  }
+  double get effectiveTriggerRange => triggerRangeProvider?.call() ?? edgeTriggerRange;
+  void setEdgeTriggerRange(double value) {
+    if (!value.isFinite) return;
+    _cancelDwell();
+    edgeTriggerRange = value.clamp(.1, 1);
+    _saveSettings();
+    _notify();
+  }
   final LanInput _input;
   final ClipboardAccess? _clipboardAccess;
   final DesktopSettings _settings;
@@ -58,7 +79,9 @@ class BridgeController extends ChangeNotifier {
       'role': role.name,
       'connectionMode': connectionMode.name,
       'side': side.name,
-      'offset': screenOffset
+      'offset': screenOffset,
+      'edgeTriggerRange': edgeTriggerRange,
+      'switchDelayMs': switchDelayMs,
     };
     _settingsQueue =
         _settingsQueue.then((_) => _settings.save(data)).catchError((Object e) {
@@ -167,6 +190,15 @@ class BridgeController extends ChangeNotifier {
   int _pendingClipboard = 0, _pendingFiles = 0;
   int _inputRevision = 0;
   bool _inputEnabled = true;
+  Timer? _dwellTimer;
+  Map<String, dynamic>? _dwellEvent;
+  int _dwellToken = 0;
+  void _cancelDwell() {
+    _dwellTimer?.cancel();
+    _dwellTimer = null;
+    _dwellEvent = null;
+    _dwellToken++;
+  }
   late final _nativeQueue = InputEventQueue<({int epoch, int revision})>(
       consume: (event, context) async {
         if (context.epoch == _epoch &&
@@ -180,6 +212,7 @@ class BridgeController extends ChangeNotifier {
           _fail('输入服务已停止：$error', context.epoch),
       limit: 1024);
   Future<void> suspendInput() async {
+    _cancelDwell();
     _inputEnabled = false;
     _inputRevision++;
     _nativeQueue.clear();
@@ -205,6 +238,12 @@ class BridgeController extends ChangeNotifier {
         side = PeerSide.values
             .firstWhere((v) => v.name == data['side'], orElse: () => side);
         final offset = data['offset'];
+        final triggerRange = data['edgeTriggerRange'];
+        if (triggerRange is num && triggerRange.isFinite) {
+          edgeTriggerRange = triggerRange.toDouble().clamp(.1, 1);
+        }
+        final delay = data['switchDelayMs'];
+        if (delay is int) switchDelayMs = delay.clamp(0, 2000);
         if (offset is num && offset.isFinite) {
           screenOffset = offset.toDouble().clamp(-0.9, 0.9);
         }
@@ -277,7 +316,8 @@ class BridgeController extends ChangeNotifier {
     }
     return arrangement.edge(rect, x.toDouble(), y.toDouble()) &&
         arrangement
-            .overlaps(arrangement.tangent(rect, x.toDouble(), y.toDouble()));
+            .overlaps(arrangement.tangent(rect, x.toDouble(), y.toDouble()),
+                triggerRange: effectiveTriggerRange);
   }
 
   Future<void> returnToLocal() async {
@@ -710,6 +750,7 @@ class BridgeController extends ChangeNotifier {
       return;
     }
     if (!remoteActive) {
+      if (event['type'] == 'button' || event['type'] == 'key') _cancelDwell();
       if (event['type'] != 'move' || DateTime.now().isBefore(_crossAfter)) {
         return;
       }
@@ -718,12 +759,31 @@ class BridgeController extends ChangeNotifier {
           x >= local.x + local.width ||
           y < local.y ||
           y >= local.y + local.height) {
+        _cancelDwell();
         return;
       }
       final fraction = arrangement.tangent(local, x, y);
-      if (!arrangement.edge(local, x, y) || !arrangement.overlaps(fraction)) {
+      if (!arrangement.edge(local, x, y) ||
+          !arrangement.overlaps(fraction, triggerRange: effectiveTriggerRange)) {
+        _cancelDwell();
         return;
       }
+      if (effectiveSwitchDelay > 0 && event['_dwellToken'] != _dwellToken) {
+        _dwellEvent = Map.of(event);
+        if (_dwellTimer == null) {
+          final token = _dwellToken;
+          final revision = _inputRevision;
+          _dwellTimer = Timer(Duration(milliseconds: effectiveSwitchDelay), () {
+            final pending = _dwellEvent;
+            if (pending != null && token == _dwellToken) {
+              _nativeQueue.add({...pending, '_dwellToken': token},
+                  (epoch: epoch, revision: revision));
+            }
+          });
+        }
+        return;
+      }
+      _cancelDwell();
       try {
         await _input.setRemoteCapture(true);
       } on PlatformException catch (e) {
@@ -1100,6 +1160,7 @@ class BridgeController extends ChangeNotifier {
   }
 
   Future<void> _doDisconnect() async {
+    _cancelDwell();
     ++_epoch;
     _inputRevision++;
     _nativeQueue.clear();

@@ -19,9 +19,14 @@ class ScreenArrangement {
   double tangent(ScreenRect rect, double x, double y) => side.horizontal
       ? rect.fractionY(y)
       : ((x - rect.x) / (rect.width - 1)).clamp(0, 1);
-  bool overlaps(double fraction, {bool reverse = false}) {
+  bool overlaps(double fraction, {bool reverse = false, double triggerRange = 1}) {
     final mapped = fraction + (reverse ? offset : -offset);
-    return mapped >= 0 && mapped <= 1;
+    if (mapped < 0 || mapped > 1) return false;
+    final start = (offset > 0 ? offset : 0.0).clamp(0.0, 1.0);
+    final end = (offset < 0 ? 1 + offset : 1.0).clamp(0.0, 1.0);
+    final coordinate = reverse ? mapped : fraction;
+    final margin = (end - start) * (1 - triggerRange.clamp(0.0, 1.0)) / 2;
+    return coordinate >= start + margin && coordinate <= end - margin;
   }
 
   bool edge(ScreenRect rect, double x, double y, {bool reverse = false}) {

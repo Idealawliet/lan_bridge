@@ -1100,6 +1100,27 @@ class _BridgeDashboardState extends State<BridgeDashboard> {
           ),
           const SizedBox(height: 16),
           Text('本机局域网地址：${local.localAddresses.join('、')}'),
+          const SizedBox(height: 16),
+          Text('屏幕边缘触发范围：${(local.edgeTriggerRange * 100).round()}%'),
+          Slider(
+            value: local.edgeTriggerRange,
+            min: .1,
+            max: 1,
+            divisions: 9,
+            label: '${(local.edgeTriggerRange * 100).round()}%',
+            onChanged: local.setEdgeTriggerRange,
+          ),
+          const Text('以两个屏幕重叠边缘的中心为准，仅影响从主机进入客户端。',
+              style: TextStyle(color: _muted, fontSize: 12)),
+          Text('屏幕边缘停留延迟：${local.switchDelayMs} 毫秒'),
+          Slider(
+            value: local.switchDelayMs.toDouble(),
+            min: 0,
+            max: 2000,
+            divisions: 20,
+            label: '${local.switchDelayMs} 毫秒',
+            onChanged: (value) => local.setSwitchDelay(value.round()),
+          ),
           if (local.role == BridgeRole.source) ...[
             const SizedBox(height: 16),
             TextField(

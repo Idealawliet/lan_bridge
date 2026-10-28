@@ -192,6 +192,8 @@ class LanWorkspace extends ChangeNotifier {
     _notify();
     final controller = BridgeController(
         input: router.channel(device.id),
+        triggerRangeProvider: () => local.edgeTriggerRange,
+        switchDelayProvider: () => local.switchDelayMs,
         port: device.port,
         enableSharing: enableSharing);
     controller.setArrangement(side, offset);

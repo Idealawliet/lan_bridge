@@ -12,6 +12,19 @@ import 'package:lan_bridge/core/screen_layout.dart';
 import 'package:lan_input/lan_input.dart';
 
 void main() {
+  test('dwell requires remaining at the edge and cancels when leaving', () async {
+    final pair = await _Controllers.open();
+    addTearDown(pair.close);
+    pair.source.setSwitchDelay(200);
+    pair.sourceInput.move(1919, 500);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(pair.source.remoteActive, isFalse);
+    pair.sourceInput.move(1800, 500);
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    expect(pair.source.remoteActive, isFalse);
+    pair.sourceInput.move(1919, 500);
+    await _until(() => pair.target.remoteActive);
+  });
   for (final preparationFails in [true, false]) {
     test(
         'file drag failure restores capture and prepares before disabling edge: $preparationFails',

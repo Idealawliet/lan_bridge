@@ -2,6 +2,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lan_bridge/core/screen_layout.dart';
 
 void main() {
+  test('trigger range is centered on the shared portion of the edge', () {
+    const layout = ScreenArrangement(PeerSide.right, .4);
+    expect(layout.overlaps(.45, triggerRange: .5), isFalse);
+    expect(layout.overlaps(.7, triggerRange: .5), isTrue);
+    expect(layout.overlaps(.95, triggerRange: .5), isFalse);
+    expect(layout.overlaps(.3, reverse: true, triggerRange: .5), isTrue);
+    expect(layout.overlaps(.05, reverse: true, triggerRange: .5), isFalse);
+  });
   test('resolution matrix keeps normalized positions through all shared seams',
       () {
     const screens = [
