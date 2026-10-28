@@ -3,6 +3,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lan_bridge/core/input_event_queue.dart';
 
 void main() {
+  test('edge dwell expiration remains ordered between mouse samples', () async {
+    final gate = Completer<void>();
+    final events = <Map<String, dynamic>>[];
+    final queue = InputEventQueue<int>(
+        consume: (event, _) async {
+          if (events.isEmpty) await gate.future;
+          events.add(event);
+        },
+        onError: (error, _, __) => fail('$error'));
+    queue.add({'type': 'key', 'usage': 4, 'down': true}, 0);
+    queue.add({'type': 'move', 'x': 1919, 'dx': 1, 'dy': 0}, 0);
+    queue.add({'type': 'edgeDwell', '_dwellToken': 7, 'x': 1919}, 0);
+    queue.add({'type': 'move', 'x': 1800, 'dx': -119, 'dy': 0}, 0);
+    gate.complete();
+    await queue.idle;
+    expect(events.map((event) => event['type']),
+        ['key', 'move', 'edgeDwell', 'move']);
+    expect(events[2]['_dwellToken'], 7);
+  });
   test('capture mode transition is a mouse coalescing barrier', () async {
     final gate = Completer<void>();
     final events = <Map<String, dynamic>>[];

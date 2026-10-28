@@ -739,6 +739,12 @@ class BridgeController extends ChangeNotifier {
 
   Future<void> _onNative(Map<String, dynamic> event, int epoch) async {
     final local = _local!, remote = _remote!;
+    // A timer expiry is an ordering barrier: it must not be coalesced with a
+    // later mouse sample or a cancelled dwell can be lost in the input queue.
+    if (event['type'] == 'edgeDwell') {
+      if (event['_dwellToken'] != _dwellToken || _dwellEvent == null) return;
+      event = {...event, 'type': 'move'};
+    }
     if (event['type'] == 'switchShortcut') {
       _cancelDwell();
       if (sharingBusy) return;
@@ -802,7 +808,7 @@ class BridgeController extends ChangeNotifier {
           _dwellTimer = Timer(Duration(milliseconds: effectiveSwitchDelay), () {
             final pending = _dwellEvent;
             if (pending != null && token == _dwellToken) {
-              _nativeQueue.add({...pending, '_dwellToken': token},
+              _nativeQueue.add({...pending, 'type': 'edgeDwell', '_dwellToken': token},
                   (epoch: epoch, revision: revision));
             }
           });
