@@ -5,6 +5,49 @@ import 'package:lan_bridge/sharing/file_transfer.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('late directory error does not discard a new offer', () async {
+    final directory = Completer<Directory>();
+    final sent = <Map<String, dynamic>>[];
+    final receiver = FileTransfer(
+        send: (message) async => sent.add(message),
+        receiveDirectory: () => directory.future);
+    addTearDown(receiver.close);
+    Map<String, dynamic> offer(String id) => {
+          'op': 'offer', 'id': id, 'name': 'file.txt', 'count': 1,
+          'bytes': 4, 'drag': false, 'y': .5,
+        };
+    const first = '11111111111111111111111111111111';
+    const second = '22222222222222222222222222222222';
+    await receiver.receive(offer(first));
+    final pending = receiver.accept();
+    await receiver.cancel();
+    await receiver.receive(offer(second));
+    directory.completeError(StateError('旧请求失败'));
+    await pending;
+    expect(receiver.offer?.id, second);
+    expect(sent.where((message) => message['op'] == 'reject'), isEmpty);
+  });
+  test('receiving directory failure is reported as a failure to both sides', () async {
+    final root = await Directory.systemTemp.createTemp('lan-unavailable-folder-');
+    addTearDown(() => root.delete(recursive: true));
+    final file = await File(p.join(root.path, 'file.txt')).writeAsString('data');
+    late FileTransfer sender, receiver;
+    receiver = FileTransfer(
+        send: (message) => sender.receive(message),
+        receiveDirectory: () async => throw StateError('下载目录不可用'));
+    sender = FileTransfer(
+        send: (message) async {
+          await receiver.receive(message);
+          if (message['op'] == 'offer') await receiver.accept();
+        },
+        receiveDirectory: () async => root);
+    addTearDown(sender.close);
+    addTearDown(receiver.close);
+    await expectLater(sender.sendPaths([file.path]), throwsStateError);
+    expect(receiver.history.single.result, contains('下载目录不可用'));
+    expect(sender.history.single.result, contains('下载目录不可用'));
+    expect(receiver.history.single.result, isNot(contains('已拒绝接收')));
+  });
   test('clipboard write failure records failure while retaining received files', () async {
     final root = await Directory.systemTemp.createTemp('lan-clipboard-failure-');
     addTearDown(() => root.delete(recursive: true));

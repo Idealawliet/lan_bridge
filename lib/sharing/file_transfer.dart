@@ -484,9 +484,15 @@ class FileTransfer extends ChangeNotifier {
       _notify();
       await _emit('ack', incoming.id, {'seq': -1});
     } catch (e) {
-      await reject();
+      // The offer may have been cancelled while the directory was resolving.
+      // Never discard a replacement offer or report a stale failure.
+      if (_closed || offer != incoming) return;
+      await _discard();
       status = '无法创建接收目录：$e';
+      _record(incoming.id, incoming.name, incoming.bytes, false, incoming.drag, status);
       _notify();
+      final reason = status.length > 256 ? status.substring(0, 256) : status;
+      await _emit('reject', incoming.id, {'reason': reason});
     }
   }
 
