@@ -19,6 +19,9 @@ class ScreenArrangement {
   double tangent(ScreenRect rect, double x, double y) => side.horizontal
       ? rect.fractionY(y)
       : ((x - rect.x) / (rect.width - 1)).clamp(0, 1);
+  /// [fraction] is normalized along the edge in the current screen's units.
+  /// The offset maps it to the other tile; reverse crossings use the inverse
+  /// mapping. A restricted trigger range is centered within the shared seam.
   bool overlaps(double fraction, {bool reverse = false, double triggerRange = 1}) {
     final mapped = fraction + (reverse ? offset : -offset);
     if (mapped < 0 || mapped > 1) return false;
@@ -59,6 +62,8 @@ class ScreenArrangement {
       {bool returning = false}) {
     final edge = returning ? side : side.opposite;
     final f = fraction.clamp(0.0, 1.0);
+    // Re-enter the host away from the seam to prevent an immediate recross.
+    // Entry to the target uses only one unit so movement feels continuous.
     final inset = returning
         ? ((side.horizontal ? rect.width : rect.height) / 4).clamp(1.0, 12.0)
         : 1.0;

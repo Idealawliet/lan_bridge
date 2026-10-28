@@ -248,6 +248,8 @@ class LanWorkspace extends ChangeNotifier {
       throw StateError('请先完成或取消当前文件传输');
     }
     busy = true;
+    // Freeze routing before touching either peer. The old peer must release
+    // held input and clipboard ownership before the new peer receives events.
     router.suspended = true;
     try {
       final previous = active?.controller;
@@ -284,6 +286,8 @@ class LanWorkspace extends ChangeNotifier {
         (active?.controller.sharingBusy ?? false)) {
       return;
     }
+    // Prefer the focused peer when shared edges overlap. Otherwise select the
+    // first matching connected peer; the router forwards the triggering move.
     if (active?.controller.matchesLocalEdge(event) ?? false) return;
     for (final member in computers.values) {
       if (member.controller.matchesLocalEdge(event)) {

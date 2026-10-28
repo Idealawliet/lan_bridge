@@ -25,7 +25,8 @@ class DesktopSettings {
     await file.parent.create(recursive: true);
     final temporary = File('${file.path}.tmp');
     await temporary.writeAsString(jsonEncode(data), flush: true);
-    // Writes are serialized by the controller.
+    // The controller serializes writes. On Windows the destination must be
+    // removed before rename; a crash in that gap can leave only the tmp file.
     if (Platform.isWindows && await file.exists()) await file.delete();
     await temporary.rename(file.path);
   }

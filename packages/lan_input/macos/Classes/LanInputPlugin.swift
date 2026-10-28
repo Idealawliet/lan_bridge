@@ -350,6 +350,8 @@ public final class LanInputPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
             emit(["type": "emergency"])
             return nil
         }
+        // Consume F12 locally and wait for it and the modifiers to be released
+        // before requesting a switch. Capture rejects held physical input.
         if switchShortcutEnabled && type == .keyDown && keyCode == 111 && event.flags.contains(.maskControl) && event.flags.contains(.maskAlternate) {
             switchShortcutPending = true
             switchShortcutKeyDown = true

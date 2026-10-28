@@ -11,6 +11,8 @@ const maxTransferEntries = 10000;
 const maxTransferBytes = 100 * 1024 * 1024 * 1024;
 typedef SendFrame = Future<void> Function(Map<String, dynamic> message);
 
+/// A bounded, in-memory history entry belonging to the current connection.
+/// A drag record can move from "bytes received" to a later native drop result.
 class TransferRecord {
   TransferRecord(this.id, this.name, this.bytes, this.outgoing, this.drag,
       this.result, this.time);
@@ -117,6 +119,9 @@ class FileTransfer extends ChangeNotifier {
           [Map<String, dynamic> fields = const {}]) =>
       send({'type': 'share', 'op': op, 'id': id, ...fields});
 
+  /// Scan a portable manifest, then send each entry in acknowledged chunks.
+  /// The sender checks file lengths again after reading to detect changes
+  /// during transfer. Original files are copied, never deleted.
   Future<void> sendPaths(List<String> paths,
       {bool drag = false, bool clipboard = false, double y = .5}) async {
     if (_closed || sending) throw StateError('已有发送任务');
@@ -138,6 +143,8 @@ class FileTransfer extends ChangeNotifier {
     try {
       final entries = <_Entry>[];
       final names = <String>{};
+      // Do not follow links: a manifest must not escape the selected roots or
+      // reveal files that were not explicitly selected for transfer.
       Future<void> scan(String local, String relative) async {
         if (_closed || _outId != id) throw StateError('传输已取消');
         validateTransferPath(relative);
@@ -223,6 +230,8 @@ class FileTransfer extends ChangeNotifier {
             {'seq': seq++, 'hash': hashResult.value.toString()});
       }
       if (drag) {
+        // Register before sending `finish`: the peer can report the drop result
+        // before the final acknowledgement returns to this sender.
         _outgoingDragId = id;
         _record(id, sendingName!, sendTotal, true, true, '正在完成文件传输');
       }
@@ -255,6 +264,8 @@ class FileTransfer extends ChangeNotifier {
       String op, String id, Map<String, dynamic> fields,
       {Duration timeout = const Duration(seconds: 25)}) async {
     if (_closed || _outId != id) throw StateError('传输已取消');
+    // At most one frame is awaiting acknowledgement, bounding both queued
+    // memory and disk writes. The sequence prevents accepting a stale reply.
     final reply = Completer<Map<String, dynamic>>();
     _reply = reply;
     final future = reply.future.timeout(timeout);
@@ -423,6 +434,8 @@ class FileTransfer extends ChangeNotifier {
               FileSystemEntityType.notFound) {
             throw const FormatException('接收目录已存在');
           }
+          // Publish the staging directory only after all declared entries,
+          // byte counts, and per-file hashes have been checked.
           await stage.rename(destination);
           completedTransfer = transfer;
           final paths =
@@ -528,6 +541,8 @@ class FileTransfer extends ChangeNotifier {
   }
 
   Future<void> _checkParents(String relative) async {
+    // Recheck each parent immediately before creating a child to reject an
+    // observed replacement. This check and subsequent creation are not atomic.
     var path = _staging!.path;
     for (final segment in [
       '.',

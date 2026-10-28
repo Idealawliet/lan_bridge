@@ -559,6 +559,9 @@ class NativeBridge {
       GetCursorPos(&self->last_mouse_);
       return 1;
     }
+    // Hold the shortcut until every physical key is released. SetRemote
+    // rejects capture while keys are held, and forwarding F12 would leak the
+    // shortcut into the controlled computer.
     if (self->switch_shortcut_enabled_ && down && usage == 0x45 && control && alt) {
       self->switch_shortcut_pending_ = true;
       return 1;

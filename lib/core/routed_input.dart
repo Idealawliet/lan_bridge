@@ -7,6 +7,9 @@ typedef _RouteContext = ({int generation, int focus, int suspension});
 
 /// Multiple encrypted sessions share one OS input hook. Only the focused
 /// session may manipulate input or observe ordinary native events.
+/// Each queued event captures three counters: restarting capture, changing
+/// focus, or entering/leaving a suspension invalidates events from before that
+/// transition. This prevents delayed keys from reaching a different computer.
 class InputRouter {
   InputRouter(this.native);
   final LanInput native;
@@ -55,6 +58,8 @@ class InputRouter {
       return;
     }
     await beforeEvent?.call(event);
+    // A move may itself select a new screen at the seam. Deliver that one move
+    // to the newly focused channel, but never carry keys or buttons across.
     if (!suspended &&
         context.generation == _generation &&
         ((context.focus == _focusVersion &&
@@ -101,6 +106,8 @@ class InputRouter {
 
   Future<void> stop(String id) async {
     if (!_capturing.remove(id)) return;
+    // The native hook is shared: removing one channel must not stop input for
+    // other connected clients. Stop it only when the final subscriber leaves.
     if (_capturing.isEmpty) {
       _generation++;
       final subscription = _subscription;

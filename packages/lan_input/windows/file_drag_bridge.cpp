@@ -142,6 +142,8 @@ struct FileDragBridge::State {
 FileDragBridge::FileDragBridge(Callback callback) : state_(std::make_unique<State>()) {
   state_->callback = std::move(callback); state_->ole = SUCCEEDED(OleInitialize(nullptr));
   auto* state = state_.get();
+  // OLE drag runs outside Dart's event loop. If the app stops heartbeating,
+  // release the synthetic mouse button so the desktop cannot stay in a drag.
   state_->watchdog = std::thread([state] {
     while (!state->stopWatch) {
       if (state->running && GetTickCount64() - state->heartbeat.load() > 2500) {

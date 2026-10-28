@@ -198,6 +198,8 @@ class SecureListener {
 
   void _accept(Socket socket) {
     final now = DateTime.now();
+    // PINs have a small search space. Bound both the attempt rate and the
+    // number of in-flight handshakes; this is not a substitute for a strong PIN.
     _attempts.removeWhere(
         (time) => now.difference(time) >= const Duration(minutes: 1));
     if (_attempts.length >= 5) {
@@ -221,6 +223,8 @@ class SecureListener {
         if (_closed || _active != null || _reserved) {
           throw StateError('A controller is already connected');
         }
+        // Reserve after proof verification but before the final ready frame.
+        // Competing authenticated handshakes cannot both become active.
         _reserved = true;
         ownsReservation = true;
       }).timeout(_handshakeTimeout);
@@ -282,6 +286,8 @@ class _SessionKeys {
 
 Future<_SessionKeys> _clientHandshake(
     _FrameChannel channel, SecretKey secret) async {
+  // Both peers contribute fresh nonces. The transcript binds the proofs and
+  // derived traffic keys to this handshake rather than reusing them per PIN.
   final clientNonce = _randomBytes(32);
   await channel.write({'v': 1, 'type': 'hello', 'nonce': _encode(clientNonce)});
   final challenge = await channel.read();
@@ -351,6 +357,8 @@ Future<void> _verifyProof(Map<String, dynamic> frame, SecretKey key,
   final received = _decodeField(frame, 'proof', exactLength: 32);
   final expected = base64Url
       .decode(base64Url.normalize(await _proof(key, transcript, role)));
+  // Compare all bytes before deciding, rather than exiting at the first
+  // mismatch. Each proof is also bound to its distinct role in the transcript.
   var difference = 0;
   for (var index = 0; index < expected.length; index++) {
     difference |= expected[index] ^ received[index];
@@ -361,6 +369,8 @@ Future<void> _verifyProof(Map<String, dynamic> frame, SecretKey key,
 }
 
 Future<_SessionKeys> _deriveKeys(SecretKey secret, List<int> transcript) async {
+  // Separate directional keys allow each peer to start its nonce counter at
+  // zero without reusing an AES-GCM nonce under the same key.
   final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
   final client = await hkdf.deriveKey(
       secretKey: secret,

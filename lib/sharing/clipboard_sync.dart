@@ -78,6 +78,11 @@ class SystemClipboard implements ClipboardAccess {
   }
 }
 
+/// Synchronizes clipboard changes for one active session.
+///
+/// Revision checks guard asynchronous OS reads against concurrent local copies;
+/// fingerprints suppress echoes after applying remote content. File clipboard
+/// entries use [FileTransfer] so the original file bytes and names survive.
 class ClipboardSync extends ChangeNotifier {
   ClipboardSync({required this.send, required this.access, this.sendFiles});
   final Future<void> Function(List<String>)? sendFiles;
@@ -121,6 +126,8 @@ class ClipboardSync extends ChangeNotifier {
   }
 
   void setEnabled(bool value) {
+    // Increment even on resume: any in-flight read or write begun under the
+    // previous policy must not become a new outgoing synchronization.
     _generation++;
     enabled = value;
     _revision = null;
@@ -220,6 +227,8 @@ class ClipboardSync extends ChangeNotifier {
   }
 
   Future<bool> applyFiles(List<String> paths, {int? expectedRevision}) async {
+    // A potentially long file transfer must not overwrite a newer local copy
+    // made after the receiver accepted the offer.
     if (_closed || !enabled || _applying) return false;
     final generation = _generation;
     if (expectedRevision != null &&

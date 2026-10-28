@@ -16,12 +16,18 @@ import 'input_event_queue.dart';
 import 'app_version.dart';
 export 'screen_layout.dart' show PeerSide, PeerSideGeometry;
 
+/// The source owns the physical keyboard and mouse; the target receives input.
 enum BridgeRole { source, target }
 
 enum ConnectionMode { client, server }
 
 enum ConnectionPhase { idle, listening, connecting, connected }
 
+/// Owns one encrypted session, its native input capture and sharing services.
+///
+/// [_epoch] invalidates work from earlier sessions. [_inputRevision] is a
+/// narrower guard for queued native events when focus is suspended or resumed.
+/// Both are needed because switching focus need not disconnect the session.
 class BridgeController extends ChangeNotifier {
   BridgeController(
       {LanInput? input,
@@ -203,6 +209,8 @@ class BridgeController extends ChangeNotifier {
   Map<String, dynamic>? _dwellEvent;
   int _dwellToken = 0;
   void _cancelDwell() {
+    // Timers may already have enqueued an event. Incrementing the token makes
+    // that event harmless even after Timer.cancel() can no longer remove it.
     _dwellTimer?.cancel();
     _dwellTimer = null;
     _dwellEvent = null;
@@ -554,6 +562,8 @@ class BridgeController extends ChangeNotifier {
         consume: (message, messageEpoch) async {
           if (messageEpoch != _epoch) return;
           if (epoch != _epoch) return;
+          // Do not accept ordinary input until the peer has supplied compatible
+          // version, role and geometry information inside the secure channel.
           if (!hello.isCompleted) {
             if (message['appVersion'] != softwareVersion) {
               throw FormatException(
@@ -863,6 +873,9 @@ class BridgeController extends ChangeNotifier {
   }
 
   Future<void> _returnLocal(int epoch) async {
+    // Stop suppressing physical input first. The peer acknowledges `leave`
+    // only after releasing injected keys/buttons, before another peer takes
+    // focus; otherwise a delayed key-up could reach the wrong machine.
     await _input.setRemoteCapture(false);
     if (epoch != _epoch) return;
     await _setRemoteActive(false);
@@ -1211,6 +1224,8 @@ class BridgeController extends ChangeNotifier {
   }
 
   Future<void> _doDisconnect() async {
+    // Invalidate asynchronous work before releasing OS state. Closing sockets
+    // and waiting for file cleanup must never keep the local mouse captured.
     _cancelDwell();
     ++_epoch;
     _inputRevision++;

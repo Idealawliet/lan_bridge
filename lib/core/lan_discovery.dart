@@ -195,6 +195,9 @@ class LanDiscovery extends ChangeNotifier {
   }
 
   void ingest(Map<String, dynamic> m, String host, DateTime now) {
+    // UDP discovery is untrusted and may be repeated, reordered or spoofed.
+    // Validate bounded fields before retaining them; authentication happens on
+    // the separate encrypted transport, not through this device ID or name.
     if (_closed || m['id'] == id) return;
     final op = m['op'];
     if (op == 'response') {
@@ -220,6 +223,8 @@ class LanDiscovery extends ChangeNotifier {
           previous != null &&
           previous.device.id == m['id'] &&
           previous.device.host == host) {
+        // Repeat a prior decision when a response was lost, without showing a
+        // duplicate request or silently changing the user's choice.
         if (previous.status != 'pending') _sendResponse(previous);
         return;
       }
@@ -275,6 +280,8 @@ class LanDiscovery extends ChangeNotifier {
   }
 
   void expire(DateTime now) {
+    // Announcements are periodically renewed. Requests live longer than
+    // devices so a user has time to act even if a multicast packet is lost.
     final before = devices.length;
     final requestsBefore = incomingRequests.length + outgoingRequests.length;
     devices.removeWhere((_, device) =>

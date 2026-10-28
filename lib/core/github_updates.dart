@@ -386,6 +386,8 @@ class GitHubUpdates extends ChangeNotifier {
       stage = '准备本地文件';
       final directory = await _directory();
       await directory.create(recursive: true);
+      // Each attempt has its own destination so a previous installer cannot
+      // block or be mistaken for the file currently being downloaded.
       attemptDirectory = await directory.createTemp('download-');
       final destination =
           File(p.join(attemptDirectory.path, release.installer.name));
@@ -412,6 +414,8 @@ class GitHubUpdates extends ChangeNotifier {
         }
       }
       hash.close();
+      // A .part file is never offered for installation. Verify both the
+      // published asset length and checksum before renaming it into place.
       stage = '校验安装包';
       await sink.close();
       sink = null;
@@ -468,6 +472,8 @@ class GitHubUpdates extends ChangeNotifier {
   }
 
   Future<void> openInstaller() async {
+    // The downloaded file may have changed since the progress dialog closed.
+    // Recheck it immediately before launching the platform installer.
     final file = downloadedFile;
     if (file == null || _downloadedHash == null || !supported) {
       throw StateError('请先下载并校验安装包');

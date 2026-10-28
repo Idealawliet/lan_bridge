@@ -7,6 +7,10 @@ class _InputItem<T> {
   final T context;
 }
 
+/// A reversal can cross a boundary even when the net displacement is zero.
+bool _changesDirection(num previous, num next) =>
+    (previous < 0 && next > 0) || (previous > 0 && next < 0);
+
 /// Preserves keys/buttons/scroll as ordering barriers. Only adjacent mouse
 /// samples from the same session are merged, retaining total relative motion
 /// and the newest absolute position. Optional source pacing bounds packet rate;
@@ -29,6 +33,8 @@ class InputEventQueue<T> {
   final _items = ListQueue<_InputItem<T>>();
   Completer<void>? _idle;
   int merged = 0, peakDepth = 0;
+  /// Waits for the current consumer and all queued work to finish. Clearing
+  /// the queue does not cancel a consumer already awaiting an async operation.
   Future<void> get idle => _idle?.future ?? Future<void>.value();
   void clear() => _items.clear();
 
@@ -62,8 +68,8 @@ class InputEventQueue<T> {
           oldDy.isFinite &&
           // Reversals must retain their path: crossing a screen seam or
           // clamping at an edge depends on intermediate positions.
-          !(dx > 0 && oldDx < 0 || dx < 0 && oldDx > 0) &&
-          !(dy > 0 && oldDy < 0 || dy < 0 && oldDy > 0)) {
+          !_changesDirection(oldDx, dx) &&
+          !_changesDirection(oldDy, dy)) {
         _items.last.event = {...event, 'dx': oldDx + dx, 'dy': oldDy + dy};
         merged++;
         return;
@@ -110,6 +116,8 @@ class InputEventQueue<T> {
         }
       }
     } finally {
+      // There is no await between checking the queue and resetting _idle, so
+      // add() cannot miss the transition to an idle consumer on this isolate.
       _idle = null;
       completion.complete();
     }
