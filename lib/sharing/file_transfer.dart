@@ -330,6 +330,7 @@ class FileTransfer extends ChangeNotifier {
       _notify();
       return;
     }
+    TransferOffer? completedTransfer;
     try {
       if (!receiving || _staging == null) throw StateError('传输尚未接受');
       if (m['seq'] != _sequence++) throw const FormatException('文件帧顺序错误');
@@ -423,6 +424,7 @@ class FileTransfer extends ChangeNotifier {
             throw const FormatException('接收目录已存在');
           }
           await stage.rename(destination);
+          completedTransfer = transfer;
           final paths =
               _roots.map((name) => p.join(destination, name)).toList();
           _staging = null;
@@ -444,9 +446,9 @@ class FileTransfer extends ChangeNotifier {
       }
       await _emit('ack', id, {'seq': m['seq']});
     } catch (e) {
-      final failed = offer;
+      final failed = offer ?? completedTransfer;
       await _discard();
-      status = '接收失败：$e';
+      status = '接收失败：$e${completedTransfer != null && lastDirectory != null ? '；已接收文件保存在 $lastDirectory' : ''}';
       if (failed != null) _record(id, failed.name, failed.bytes, false, failed.drag, status);
       _notify();
       final reason = e.toString();

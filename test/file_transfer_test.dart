@@ -5,6 +5,26 @@ import 'package:lan_bridge/sharing/file_transfer.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('clipboard write failure records failure while retaining received files', () async {
+    final root = await Directory.systemTemp.createTemp('lan-clipboard-failure-');
+    addTearDown(() => root.delete(recursive: true));
+    final file = await File(p.join(root.path, 'report.txt')).writeAsString('data');
+    late FileTransfer sender, receiver;
+    receiver = FileTransfer(
+      send: (message) => sender.receive(message),
+      receiveDirectory: () async => Directory(p.join(root.path, 'received')),
+      onClipboardOffered: () async => true,
+      onClipboardReceived: (_) async => throw StateError('剪贴板已变化'),
+    );
+    sender = FileTransfer(send: (message) => receiver.receive(message), receiveDirectory: () async => root);
+    addTearDown(sender.close);
+    addTearDown(receiver.close);
+    await expectLater(sender.sendPaths([file.path], clipboard: true), throwsStateError);
+    expect(receiver.history.single.result, contains('剪贴板已变化'));
+    expect(receiver.history.single.result, isNot(contains('接收完成')));
+    expect(await File(p.join(receiver.lastDirectory!, 'report.txt')).readAsString(), 'data');
+    expect(sender.history.single.result, contains('剪贴板已变化'));
+  });
   test('records names, sizes and the final cross-screen drag outcome', () async {
     final root = await Directory.systemTemp.createTemp('lan-drag-record-');
     addTearDown(() => root.delete(recursive: true));
