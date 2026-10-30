@@ -54,6 +54,10 @@ class FileTransfer extends ChangeNotifier {
   final Future<bool> Function()? onClipboardOffered;
   final Future<void> Function(List<String> paths)? onClipboardReceived;
   TransferOffer? offer;
+  // 正在准备接收目录的请求；与 offer 分开保存，避免重复点击创建多个目录。
+  TransferOffer? _acceptingOffer;
+  // 同一请求的所有调用者等待同一个结果，取消后的新请求仍可独立开始。
+  Future<void>? _acceptance;
   String status = '将文件或文件夹拖入，发送到另一台电脑';
   String? lastDirectory;
   String? sendingName;
@@ -65,19 +69,26 @@ class FileTransfer extends ChangeNotifier {
     if (existing != null) {
       existing.result = result;
     } else {
-      history.insert(0, TransferRecord(id, name, bytes, outgoing, drag, result, DateTime.now()));
+      history.insert(
+          0,
+          TransferRecord(
+              id, name, bytes, outgoing, drag, result, DateTime.now()));
       if (history.length > 50) history.removeLast();
     }
     _notify();
   }
 
-  void dragFinished({required bool cancelled, bool outgoing = false, String? reason}) {
+  void dragFinished(
+      {required bool cancelled, bool outgoing = false, String? reason}) {
     final id = outgoing ? _outgoingDragId : _incomingDragId;
     if (id == null) return;
     for (final record in history) {
       if (record.id == id) {
-        record.result = reason != null ? '拖放失败：$reason；已接收的副本保留在下载目录'
-            : cancelled ? '拖放已取消，已接收的副本保留在下载目录' : '系统拖放已完成';
+        record.result = reason != null
+            ? '拖放失败：$reason；已接收的副本保留在下载目录'
+            : cancelled
+                ? '拖放已取消，已接收的副本保留在下载目录'
+                : '系统拖放已完成';
         break;
       }
     }
@@ -88,12 +99,15 @@ class FileTransfer extends ChangeNotifier {
     }
     _notify();
   }
+
   int sentBytes = 0, receivedBytes = 0, sendTotal = 0, receiveTotal = 0;
   final Stopwatch _sendClock = Stopwatch(), _receiveClock = Stopwatch();
   double get sendBytesPerSecond => _rate(sentBytes, _sendClock);
   double get receiveBytesPerSecond => _rate(receivedBytes, _receiveClock);
   static double _rate(int bytes, Stopwatch clock) =>
-      clock.elapsedMilliseconds == 0 ? 0 : bytes * 1000 / clock.elapsedMilliseconds;
+      clock.elapsedMilliseconds == 0
+          ? 0
+          : bytes * 1000 / clock.elapsedMilliseconds;
   bool sending = false, receiving = false, _closed = false;
   String? _outId;
   Completer<Map<String, dynamic>>? _reply;
@@ -243,7 +257,8 @@ class FileTransfer extends ChangeNotifier {
       }
     } catch (e) {
       status = '发送未完成：$e';
-      _record(id, sendingName!, manifestReady ? sendTotal : null, true, drag, status);
+      _record(id, sendingName!, manifestReady ? sendTotal : null, true, drag,
+          status);
       if (_outgoingDragId == id) _outgoingDragId = null;
       try {
         await _emit('cancel', id);
@@ -274,8 +289,10 @@ class FileTransfer extends ChangeNotifier {
     final message = await future;
     if (message['op'] != 'ack' || message['seq'] != (fields['seq'] ?? -1)) {
       final reason = message['reason'];
-      throw StateError(reason is String && reason.isNotEmpty && reason.length <= 256
-          ? '接收方：$reason' : '接收方拒绝或取消传输');
+      throw StateError(
+          reason is String && reason.isNotEmpty && reason.length <= 256
+              ? '接收方：$reason'
+              : '接收方拒绝或取消传输');
     }
     return message;
   }
@@ -337,7 +354,8 @@ class FileTransfer extends ChangeNotifier {
       final cancelled = offer!;
       await _discard();
       status = '对方已取消传输';
-      _record(id, cancelled.name, cancelled.bytes, false, cancelled.drag, status);
+      _record(
+          id, cancelled.name, cancelled.bytes, false, cancelled.drag, status);
       _notify();
       return;
     }
@@ -461,51 +479,100 @@ class FileTransfer extends ChangeNotifier {
     } catch (e) {
       final failed = offer ?? completedTransfer;
       await _discard();
-      status = '接收失败：$e${completedTransfer != null && lastDirectory != null ? '；已接收文件保存在 $lastDirectory' : ''}';
-      if (failed != null) _record(id, failed.name, failed.bytes, false, failed.drag, status);
+      status =
+          '接收失败：$e${completedTransfer != null && lastDirectory != null ? '；已接收文件保存在 $lastDirectory' : ''}';
+      if (failed != null) {
+        _record(id, failed.name, failed.bytes, false, failed.drag, status);
+      }
       _notify();
       final reason = e.toString();
-      await _emit('reject', id, {'reason': reason.length > 256 ? reason.substring(0, 256) : reason});
+      await _emit('reject', id,
+          {'reason': reason.length > 256 ? reason.substring(0, 256) : reason});
     }
   }
 
-  Future<void> accept() async {
+  /// 接收操作在目录准备阶段也保持幂等，重复调用不会重复发送确认帧。
+  Future<void> accept() {
+    // 固定本次请求，后续异步操作不能改为处理新到达的 offer。
     final incoming = offer;
-    if (incoming == null || receiving) return;
+    // 已关闭、没有邀请或已经接收时，无需再次准备目录。
+    if (_closed || incoming == null || receiving) return Future<void>.value();
+    // 同一邀请正在准备时，让所有调用者等待首次调用的完成结果。
+    if (identical(_acceptingOffer, incoming)) return _acceptance!;
+    // 先登记请求身份；取消后的新邀请与旧邀请不会共用准备状态。
+    _acceptingOffer = incoming;
+    // 保存唯一的准备任务，避免多次创建暂存目录或发送重复 ACK。
+    final acceptance = _prepareAcceptance(incoming);
+    _acceptance = acceptance;
+    return acceptance;
+  }
+
+  /// 建立接收暂存区；每次 await 后都可能遇到取消或替换邀请。
+  Future<void> _prepareAcceptance(TransferOffer incoming) async {
     try {
+      // 由宿主提供下载目录，目录查询失败会在下方反馈给双方。
       final root = await receiveDirectory();
+      // 自动创建尚不存在的下载目录及父目录。
       await root.create(recursive: true);
+      // 每次传输使用独立临时目录，校验完成前不暴露为完整接收结果。
       final stage = await root.createTemp('.lan-bridge-');
+      // 目录准备期间可能断连、取消或换成新邀请；旧结果不能覆盖新状态。
       if (_closed || offer != incoming) {
+        // 只删除本次刚创建的暂存区，保留新请求正在使用的目录。
         await stage.delete(recursive: true);
         return;
       }
+      // 从这里起暂存目录归当前接收任务所有，由完成或取消流程负责清理。
       _staging = stage;
+      // 标记接收已开始，后续 entry/chunk 消息才允许写入文件。
       receiving = true;
+      // 新任务的进度从零开始，不混入上次传输字节数。
       receivedBytes = 0;
+      // 速度统计只涵盖本次接收阶段，不包含等待用户确认的时间。
       _receiveClock
         ..reset()
         ..start();
+      // 总大小来自已验证的邀请，用于进度显示和最终完整性检查。
       receiveTotal = incoming.bytes;
+      // 文件协议序号从零开始；邀请 ACK 使用独立的 -1 标记。
       _sequence = 0;
+      // 清单条目数和声明大小均需与邀请保持一致。
       _entryCount = 0;
       _declaredBytes = 0;
+      // 清空路径去重集合，防止上一任务影响本次同名文件。
       _paths.clear();
+      // 清空已创建父目录集合，重新检查条目的父子顺序。
       _directories.clear();
+      // 清空顶层文件集合，完成后仅把本次根条目交给剪贴板或拖放回调。
       _roots.clear();
+      // 区分普通接收与系统拖放，便于界面提示用户保持拖拽。
       status = incoming.drag ? '正在准备跨屏拖放文件' : '正在接收文件';
+      // 立即更新接收状态，不等待首个文件块到达。
       _notify();
+      // 目录和状态全部就绪后再确认，允许发送方开始发送文件清单。
       await _emit('ack', incoming.id, {'seq': -1});
     } catch (e) {
-      // The offer may have been cancelled while the directory was resolving.
-      // Never discard a replacement offer or report a stale failure.
+      // 旧请求的失败不得删除新任务数据，也不能覆盖新邀请的状态提示。
       if (_closed || offer != incoming) return;
+      // 先释放当前任务已经打开的文件和暂存目录。
       await _discard();
+      // 保留原始错误，便于识别目录权限、磁盘或网络故障。
       status = '无法创建接收目录：$e';
-      _record(incoming.id, incoming.name, incoming.bytes, false, incoming.drag, status);
+      // 在接收记录中保存名称、大小和明确失败原因。
+      _record(incoming.id, incoming.name, incoming.bytes, false, incoming.drag,
+          status);
+      // 同步界面的接收状态。
       _notify();
+      // 限制错误文本大小，符合发送方对拒绝原因的长度检查。
       final reason = status.length > 256 ? status.substring(0, 256) : status;
+      // 告知发送方失败原因，避免其一直等待接收确认直到超时。
       await _emit('reject', incoming.id, {'reason': reason});
+    } finally {
+      // 只有本次请求才能释放自己的准备状态，旧任务不能解锁新任务。
+      if (identical(_acceptingOffer, incoming)) {
+        _acceptingOffer = null;
+        _acceptance = null;
+      }
     }
   }
 
@@ -514,7 +581,8 @@ class FileTransfer extends ChangeNotifier {
     final id = rejected?.id;
     await _discard();
     if (id != null) {
-      _record(id, rejected!.name, rejected.bytes, false, rejected.drag, '已拒绝接收');
+      _record(
+          id, rejected!.name, rejected.bytes, false, rejected.drag, '已拒绝接收');
       await _emit('reject', id);
     }
     status = '已拒绝接收';
@@ -530,7 +598,8 @@ class FileTransfer extends ChangeNotifier {
     }
     await _discard();
     if (incoming != null && cancelled != null) {
-      _record(incoming, cancelled.name, cancelled.bytes, false, cancelled.drag, '传输已取消');
+      _record(incoming, cancelled.name, cancelled.bytes, false, cancelled.drag,
+          '传输已取消');
     }
     if (!_closed) {
       if (out != null) await _emit('cancel', out);

@@ -5,6 +5,8 @@ import 'package:lan_bridge/core/routed_input.dart';
 
 class Native extends LanInput {
   bool cursorVisible = true;
+  int stopCalls = 0;
+  bool failStop = false;
   @override
   Future<void> setCursorVisible(bool visible) async {
     cursorVisible = visible;
@@ -16,10 +18,52 @@ class Native extends LanInput {
   @override
   Future<void> startCapture() async {}
   @override
-  Future<void> stopCapture() async {}
+  Future<void> stopCapture() async {
+    stopCalls++;
+    if (failStop) throw StateError('native stop failed');
+  }
 }
 
 void main() {
+  test('closing an active router stops the shared native capture once',
+      () async {
+    final native = Native();
+    final router = InputRouter(native);
+    final first = router.channel('a');
+    final second = router.channel('b');
+    await first.startCapture();
+    await second.startCapture();
+    router.focused = 'a';
+
+    await router.close();
+
+    expect(native.stopCalls, 1);
+    expect(router.channels, isEmpty);
+    expect(router.focused, isNull);
+    await router.close();
+    expect(native.stopCalls, 1);
+    await native.bus.close();
+  });
+
+  test('native stop failure still closes router channels and clears focus',
+      () async {
+    final native = Native()..failStop = true;
+    final router = InputRouter(native);
+    final channel = router.channel('a');
+    final streamClosed = Completer<void>();
+    channel.events.listen((_) {}, onDone: streamClosed.complete);
+    router.focused = 'a';
+    await channel.startCapture();
+
+    await expectLater(router.close(), throwsStateError);
+    await streamClosed.future;
+
+    expect(native.stopCalls, 1);
+    expect(router.channels, isEmpty);
+    expect(router.focused, isNull);
+    await native.bus.close();
+  });
+
   test(
       'mouse burst does not overflow the router or drop its final button release',
       () async {

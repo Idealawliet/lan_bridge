@@ -5,6 +5,94 @@ import 'package:lan_bridge/sharing/file_transfer.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('repeated accept prepares one directory and sends one acknowledgement',
+      () async {
+    final root = await Directory.systemTemp.createTemp('lan-repeat-accept-');
+    addTearDown(() => root.delete(recursive: true));
+    final directory = Completer<Directory>();
+    var directoryRequests = 0;
+    final messages = <Map<String, dynamic>>[];
+    final receiver = FileTransfer(
+      send: (message) async => messages.add(message),
+      receiveDirectory: () {
+        directoryRequests++;
+        return directory.future;
+      },
+    );
+    addTearDown(receiver.close);
+    await receiver.receive({
+      'op': 'offer',
+      'id': '11111111111111111111111111111111',
+      'name': 'file.txt',
+      'count': 1,
+      'bytes': 4,
+      'drag': false,
+      'y': .5,
+    });
+
+    // 模拟下载目录尚未返回时，用户连续点击两次“接收”。
+    final first = receiver.accept();
+    final repeated = receiver.accept();
+    directory.complete(root);
+    await Future.wait([first, repeated]);
+
+    expect(directoryRequests, 1);
+    expect(messages.where((message) => message['op'] == 'ack'), hasLength(1));
+    expect(receiver.receiving, isTrue);
+    expect(await root.list().toList(), hasLength(1));
+    await receiver.cancel();
+    expect(await root.list().toList(), isEmpty);
+  });
+
+  test('a replacement offer can be accepted while old preparation is pending',
+      () async {
+    final root = await Directory.systemTemp.createTemp('lan-replace-accept-');
+    addTearDown(() => root.delete(recursive: true));
+    final oldDirectory = Completer<Directory>();
+    var directoryRequests = 0;
+    final messages = <Map<String, dynamic>>[];
+    final receiver = FileTransfer(
+      send: (message) async => messages.add(message),
+      receiveDirectory: () {
+        directoryRequests++;
+        return directoryRequests == 1
+            ? oldDirectory.future
+            : Future.value(root);
+      },
+    );
+    addTearDown(receiver.close);
+    Map<String, dynamic> offer(String id) => {
+          'op': 'offer',
+          'id': id,
+          'name': 'file.txt',
+          'count': 1,
+          'bytes': 4,
+          'drag': false,
+          'y': .5,
+        };
+    const firstId = '11111111111111111111111111111111';
+    const nextId = '22222222222222222222222222222222';
+    await receiver.receive(offer(firstId));
+    final oldAcceptance = receiver.accept();
+    await receiver.cancel();
+    await receiver.receive(offer(nextId));
+    await receiver.accept();
+
+    // 旧请求稍后返回目录时，只能清理自己创建的临时文件夹。
+    oldDirectory.complete(root);
+    await oldAcceptance;
+    expect(receiver.offer?.id, nextId);
+    expect(receiver.receiving, isTrue);
+    expect(
+        messages
+            .where((message) => message['op'] == 'ack')
+            .map((message) => message['id']),
+        [nextId]);
+    expect(await root.list().toList(), hasLength(1));
+    await receiver.cancel();
+    expect(await root.list().toList(), isEmpty);
+  });
+
   test('late directory error does not discard a new offer', () async {
     final directory = Completer<Directory>();
     final sent = <Map<String, dynamic>>[];
@@ -13,8 +101,13 @@ void main() {
         receiveDirectory: () => directory.future);
     addTearDown(receiver.close);
     Map<String, dynamic> offer(String id) => {
-          'op': 'offer', 'id': id, 'name': 'file.txt', 'count': 1,
-          'bytes': 4, 'drag': false, 'y': .5,
+          'op': 'offer',
+          'id': id,
+          'name': 'file.txt',
+          'count': 1,
+          'bytes': 4,
+          'drag': false,
+          'y': .5,
         };
     const first = '11111111111111111111111111111111';
     const second = '22222222222222222222222222222222';
@@ -27,10 +120,13 @@ void main() {
     expect(receiver.offer?.id, second);
     expect(sent.where((message) => message['op'] == 'reject'), isEmpty);
   });
-  test('receiving directory failure is reported as a failure to both sides', () async {
-    final root = await Directory.systemTemp.createTemp('lan-unavailable-folder-');
+  test('receiving directory failure is reported as a failure to both sides',
+      () async {
+    final root =
+        await Directory.systemTemp.createTemp('lan-unavailable-folder-');
     addTearDown(() => root.delete(recursive: true));
-    final file = await File(p.join(root.path, 'file.txt')).writeAsString('data');
+    final file =
+        await File(p.join(root.path, 'file.txt')).writeAsString('data');
     late FileTransfer sender, receiver;
     receiver = FileTransfer(
         send: (message) => sender.receive(message),
@@ -48,10 +144,13 @@ void main() {
     expect(sender.history.single.result, contains('下载目录不可用'));
     expect(receiver.history.single.result, isNot(contains('已拒绝接收')));
   });
-  test('clipboard write failure records failure while retaining received files', () async {
-    final root = await Directory.systemTemp.createTemp('lan-clipboard-failure-');
+  test('clipboard write failure records failure while retaining received files',
+      () async {
+    final root =
+        await Directory.systemTemp.createTemp('lan-clipboard-failure-');
     addTearDown(() => root.delete(recursive: true));
-    final file = await File(p.join(root.path, 'report.txt')).writeAsString('data');
+    final file =
+        await File(p.join(root.path, 'report.txt')).writeAsString('data');
     late FileTransfer sender, receiver;
     receiver = FileTransfer(
       send: (message) => sender.receive(message),
@@ -59,28 +158,37 @@ void main() {
       onClipboardOffered: () async => true,
       onClipboardReceived: (_) async => throw StateError('剪贴板已变化'),
     );
-    sender = FileTransfer(send: (message) => receiver.receive(message), receiveDirectory: () async => root);
+    sender = FileTransfer(
+        send: (message) => receiver.receive(message),
+        receiveDirectory: () async => root);
     addTearDown(sender.close);
     addTearDown(receiver.close);
-    await expectLater(sender.sendPaths([file.path], clipboard: true), throwsStateError);
+    await expectLater(
+        sender.sendPaths([file.path], clipboard: true), throwsStateError);
     expect(receiver.history.single.result, contains('剪贴板已变化'));
     expect(receiver.history.single.result, isNot(contains('接收完成')));
-    expect(await File(p.join(receiver.lastDirectory!, 'report.txt')).readAsString(), 'data');
+    expect(
+        await File(p.join(receiver.lastDirectory!, 'report.txt'))
+            .readAsString(),
+        'data');
     expect(sender.history.single.result, contains('剪贴板已变化'));
   });
-  test('records names, sizes and the final cross-screen drag outcome', () async {
+  test('records names, sizes and the final cross-screen drag outcome',
+      () async {
     final root = await Directory.systemTemp.createTemp('lan-drag-record-');
     addTearDown(() => root.delete(recursive: true));
     final first = await File(p.join(root.path, 'one.txt')).writeAsString('abc');
     final second = await File(p.join(root.path, 'two.txt')).writeAsString('xy');
     late FileTransfer sender, receiver;
-    receiver = FileTransfer(send: (m) => sender.receive(m),
+    receiver = FileTransfer(
+        send: (m) => sender.receive(m),
         receiveDirectory: () async => Directory(p.join(root.path, 'received')),
         onDragReceived: (_, __) async {
           receiver.dragFinished(cancelled: true);
           sender.dragFinished(cancelled: true, outgoing: true);
         });
-    sender = FileTransfer(send: (m) => receiver.receive(m), receiveDirectory: () async => root);
+    sender = FileTransfer(
+        send: (m) => receiver.receive(m), receiveDirectory: () async => root);
     addTearDown(sender.close);
     addTearDown(receiver.close);
     await sender.sendPaths([first.path, second.path], drag: true);
