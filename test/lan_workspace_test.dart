@@ -249,7 +249,9 @@ void main() {
     await clients[2].disconnect();
     await until(() => !workspace.computers[ids[2]]!.controller.connected);
     expect(clients[1].connected, isTrue);
-    await workspace.focus(ids[1]);
+    // 当前设备断开后，自动将焦点交给仍在线的客户端。
+    await until(() => workspace.router.focused == ids[1] && !workspace.busy);
+    expect(clients[1].remoteActive, isFalse);
     native.move(0, 500);
     await until(() => clients[1].remoteActive);
     native.bus.add({'type': 'emergency'});

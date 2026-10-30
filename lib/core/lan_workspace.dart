@@ -40,6 +40,7 @@ class LanWorkspace extends ChangeNotifier {
     }
     local.setSwitchShortcutEnabled(enabled);
   }
+
   void _notify() {
     if (!_closed) notifyListeners();
   }
@@ -231,6 +232,20 @@ class LanWorkspace extends ChangeNotifier {
   }
 
   void _sessionChanged() {
+    // 当前设备意外掉线时，选一台仍在线的设备恢复焦点；切换仍走
+    // focus 的释放输入和暂停剪贴板流程，避免旧按键落到新设备。
+    if (!busy &&
+        !_stopping &&
+        serving &&
+        active != null &&
+        !active!.controller.connected) {
+      for (final member in computers.values) {
+        if (member.controller.connected) {
+          unawaited(_recoverFocus(member.device.id));
+          break;
+        }
+      }
+    }
     for (final member in computers.values) {
       if (member.device.id != router.focused &&
           (member.controller.clipboard?.enabled ?? false)) {
@@ -238,6 +253,15 @@ class LanWorkspace extends ChangeNotifier {
       }
     }
     _notify();
+  }
+
+  Future<void> _recoverFocus(String id) async {
+    try {
+      await focus(id);
+    } catch (e) {
+      error = '切换到其他在线设备失败：$e';
+      _notify();
+    }
   }
 
   Future<void> focus(String id) async {
